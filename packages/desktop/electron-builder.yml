@@ -1,0 +1,17 @@
+appId: com.jamesusher.music-library-organizer
+productName: Music Library Organizer
+directories:
+  buildResources: build
+files:
+  - out/**/*
+  - package.json
+win:
+  target: nsis
+mac:
+  target: dmg
+linux:
+  target: AppImage
+# No code signing configured yet — an unsigned build will trigger an OS
+# warning ("unknown publisher"/Gatekeeper) on first run. Fine for personal
+# use and for friends who know what they're installing; revisit if this
+# ever gets wider distribution.

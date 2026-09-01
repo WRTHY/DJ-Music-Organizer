@@ -1,0 +1,22 @@
+{
+  "name": "music-library-organizer",
+  "private": true,
+  "version": "0.1.0",
+  "description": "A canonical, tool-agnostic folder structure for a DJ music library, synced from Serato and eventually shared with Rekordbox. Full-stack practice project.",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "dev:desktop": "npm run dev --workspace packages/desktop",
+    "dist:desktop": "npm run dist --workspace packages/desktop"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
