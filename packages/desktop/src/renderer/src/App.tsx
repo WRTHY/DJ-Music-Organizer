@@ -14,7 +14,14 @@ import { Card } from './components/atoms/Card/Card';
 import { FolderField } from './components/molecules/FolderField/FolderField';
 import styles from './App.module.css';
 
-type Status = 'idle' | 'loading' | 'error';
+// One entry per user-triggered action. Tracking *which* action is running
+// (instead of a single boolean) is what lets each button show its own
+// "Scanning…" / "Planning…" label — a plain isLoading flag can't tell two
+// buttons apart. All four still share one value rather than one boolean
+// each, because the actions are sequential and share state (you can't
+// plan while a scan is still landing, execute reads the last plan, etc.)
+// — so every button disables while any one of them is in flight.
+type ActionKey = 'scan' | 'plan' | 'dryRun' | 'execute';
 type ScanMode = 'folders' | 'crates';
 
 function countTracks(tree: CanonicalTree): number {
@@ -43,22 +50,23 @@ export default function App() {
   const [plan, setPlan] = useState<OrganizePlan | null>(null);
   const [report, setReport] = useState<OrganizeReport | null>(null);
 
-  const [status, setStatus] = useState<Status>('idle');
+  const [loadingAction, setLoadingAction] = useState<ActionKey | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const trackCount = useMemo(() => (tree ? countTracks(tree) : 0), [tree]);
   const canScan = scanMode === 'folders' ? !!rootPath : !!subcratesDir && !!volumeRoot;
+  const isBusy = loadingAction !== null;
 
-  async function run<T>(action: () => Promise<T>, onSuccess: (result: T) => void) {
-    setStatus('loading');
+  async function run<T>(key: ActionKey, action: () => Promise<T>, onSuccess: (result: T) => void) {
+    setLoadingAction(key);
     setError(null);
     try {
       const result = await action();
       onSuccess(result);
-      setStatus('idle');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
-      setStatus('error');
+    } finally {
+      setLoadingAction(null);
     }
   }
 
@@ -69,6 +77,7 @@ export default function App() {
 
   const handleScan = () =>
     run(
+      'scan',
       () => (scanMode === 'folders' ? scanFolderTree(rootPath) : scanCrateDatabase(subcratesDir, volumeRoot)),
       (result) => {
         setTree(result);
@@ -79,6 +88,7 @@ export default function App() {
 
   const handlePlan = () =>
     run(
+      'plan',
       () => {
         if (!tree) throw new Error('Scan a library first.');
         return planOrganize(tree, targetRoot, mode);
@@ -91,6 +101,7 @@ export default function App() {
 
   const handleExecute = (dryRun: boolean) =>
     run(
+      dryRun ? 'dryRun' : 'execute',
       () => {
         if (!plan) throw new Error('Preview a plan first.');
         return executeOrganize(plan, dryRun);
@@ -158,21 +169,22 @@ export default function App() {
         />
 
         <div className={styles.actions}>
-          <Button onClick={handleScan} disabled={!canScan || status === 'loading'}>
-            Scan
+          <Button onClick={handleScan} disabled={!canScan || isBusy} loading={loadingAction === 'scan'}>
+            {loadingAction === 'scan' ? 'Scanning…' : 'Scan'}
           </Button>
-          <Button onClick={handlePlan} disabled={!tree || !targetRoot || status === 'loading'}>
-            Preview plan (copy)
+          <Button onClick={handlePlan} disabled={!tree || !targetRoot || isBusy} loading={loadingAction === 'plan'}>
+            {loadingAction === 'plan' ? 'Planning…' : 'Preview plan (copy)'}
           </Button>
-          <Button onClick={() => handleExecute(true)} disabled={!plan || status === 'loading'}>
-            Dry run
+          <Button onClick={() => handleExecute(true)} disabled={!plan || isBusy} loading={loadingAction === 'dryRun'}>
+            {loadingAction === 'dryRun' ? 'Running dry run…' : 'Dry run'}
           </Button>
           <Button
             variant="primary"
             onClick={() => handleExecute(false)}
-            disabled={!plan || status === 'loading'}
+            disabled={!plan || isBusy}
+            loading={loadingAction === 'execute'}
           >
-            Execute copy
+            {loadingAction === 'execute' ? 'Copying…' : 'Execute copy'}
           </Button>
         </div>
       </section>
