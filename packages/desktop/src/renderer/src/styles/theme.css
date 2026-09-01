@@ -1,0 +1,78 @@
+/* Design tokens, adapted from the reference portfolio's token system
+   (see docs/design-system.md for why these values were chosen and what
+   was deliberately left out, namely the licensed heading font). */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+:root {
+  color-scheme: light dark;
+
+  /* Colors — "Cream & Violet" palette, one accent color only.
+     Every other saturated color in the UI should be a status color
+     (success/warn/error), never a second brand accent. */
+  --text: light-dark(#5c5346, #9ca3af);
+  --text-h: light-dark(#1f1710, #f3f4f6);
+  --bg: light-dark(#f8f1e1, #16171d);
+  --border: light-dark(#dccba3, #2e303a);
+  --code-bg: light-dark(#efe3c8, #1f2028);
+  --accent: light-dark(#6d28d9, #a78bfa);
+  --accent-bg: light-dark(rgba(109, 40, 217, 0.1), rgba(167, 139, 250, 0.15));
+  --accent-border: light-dark(rgba(109, 40, 217, 0.4), rgba(167, 139, 250, 0.5));
+  --section-alt-bg: light-dark(#f1e6cc, #1c1e26);
+  --shadow: light-dark(rgba(60, 40, 10, 0.12), rgba(0, 0, 0, 0.4)) 0 10px 24px -8px;
+
+  /* Status colors — the deliberate exceptions to the one-accent rule. */
+  --danger: light-dark(#b00020, #f87171);
+  --danger-bg: light-dark(rgba(176, 0, 32, 0.08), rgba(248, 113, 113, 0.12));
+
+  /* Fonts. The portfolio uses a licensed custom heading font fetched from
+     a private repo at build time — deliberately not reused here so this
+     project has no external token/asset dependency. System font stack
+     for both body and headings instead. */
+  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
+  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
+  --mono: ui-monospace, Consolas, monospace;
+
+  /* Three-radius rule: cards/panels get the large radius, buttons/chips/
+     inputs get the small radius, pills (if any) get the full radius. */
+  --radius-lg: 12px;
+  --radius-sm: 4px;
+  --radius-pill: 999px;
+
+  /* Spacing scale, used instead of ad-hoc rem/px values. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  --content-width: 900px;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+}
+
+h1,
+h2,
+h3 {
+  color: var(--text-h);
+  font-family: var(--heading);
+}
+
+code {
+  font-family: var(--mono);
+  background: var(--code-bg);
+  padding: 0 4px;
+  border-radius: var(--radius-sm);
+}

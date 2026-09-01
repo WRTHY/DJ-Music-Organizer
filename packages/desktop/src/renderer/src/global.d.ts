@@ -1,3 +1,5 @@
+/// <reference types="vite/client" />
+
 import type { MloApi } from '../../shared/ipcContract';
 
 // Declares the shape of what the preload script attached via

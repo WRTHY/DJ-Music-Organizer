@@ -53,6 +53,27 @@ already treat every crate independently — it just needed confirming as
 the intended behavior, not a bug to fix. Covered by
 `__tests__/crateOrganizer.test.ts`.
 
+## 2026-09-01 — Adopt the portfolio's design system
+
+James's portfolio site (`_Portfolio/portfolio`) became the reference for
+this project's UI, replacing `App.tsx`'s ad-hoc inline `style={{...}}`
+props. Full reasoning and the rules themselves live in
+[`design-system.md`](design-system.md); the short version:
+
+- **Tokens, not hardcoded values.** A `theme.css` with `light-dark()`
+  color tokens, a three-radius rule (12px/4px/999px), and a spacing scale,
+  mirroring the portfolio's `:root` custom properties.
+- **CSS Modules + atomic-design structure** (`components/atoms`,
+  `components/molecules`), same as the portfolio, instead of one big
+  component file.
+- **Deliberate divergence: system font, not the portfolio's licensed
+  font.** The portfolio's headings use `TBJ-Orcherum`, fetched from a
+  private repo at build time via a token. Reusing it here would make this
+  project depend on that same private token to build — not appropriate for
+  something meant to be shared with friends. Asked James directly rather
+  than assuming; he chose the system font stack and keeping everything
+  else (colors, radii, component patterns) as-is.
+
 ## 2026-09-01 — Pivot to an Electron desktop app
 
 The tool only ever touches files on James's own machine, and

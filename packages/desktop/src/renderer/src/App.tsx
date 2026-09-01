@@ -9,6 +9,10 @@ import {
   scanFolderTree,
   selectFolder,
 } from './api';
+import { Button } from './components/atoms/Button/Button';
+import { Card } from './components/atoms/Card/Card';
+import { FolderField } from './components/molecules/FolderField/FolderField';
+import styles from './App.module.css';
 
 type Status = 'idle' | 'loading' | 'error';
 type ScanMode = 'folders' | 'crates';
@@ -95,15 +99,15 @@ export default function App() {
     );
 
   return (
-    <main style={{ fontFamily: 'system-ui, sans-serif', maxWidth: 900, margin: '2rem auto', padding: '0 1rem' }}>
+    <main className={styles.main}>
       <h1>Music Library Organizer</h1>
-      <p style={{ color: '#555' }}>
+      <p className={styles.subtitle}>
         Reads your Serato organization and copies files into a mirrored, tool-agnostic tree under a
         target folder you choose.
       </p>
 
-      <section style={{ display: 'grid', gap: '0.75rem', marginTop: '1.5rem' }}>
-        <div style={{ display: 'flex', gap: '1rem' }}>
+      <section className={styles.controls}>
+        <div className={styles.modeRow}>
           <label>
             <input
               type="radio"
@@ -153,59 +157,59 @@ export default function App() {
           onBrowse={pickFolder(setTargetRoot)}
         />
 
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
-          <button onClick={handleScan} disabled={!canScan || status === 'loading'}>
+        <div className={styles.actions}>
+          <Button onClick={handleScan} disabled={!canScan || status === 'loading'}>
             Scan
-          </button>
-          <button onClick={handlePlan} disabled={!tree || !targetRoot || status === 'loading'}>
+          </Button>
+          <Button onClick={handlePlan} disabled={!tree || !targetRoot || status === 'loading'}>
             Preview plan (copy)
-          </button>
-          <button onClick={() => handleExecute(true)} disabled={!plan || status === 'loading'}>
+          </Button>
+          <Button onClick={() => handleExecute(true)} disabled={!plan || status === 'loading'}>
             Dry run
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="primary"
             onClick={() => handleExecute(false)}
             disabled={!plan || status === 'loading'}
-            style={{ fontWeight: 600 }}
           >
             Execute copy
-          </button>
+          </Button>
         </div>
       </section>
 
       {error && (
-        <p role="alert" style={{ color: '#b00020', marginTop: '1rem' }}>
+        <p role="alert" className={styles.error}>
           {error}
         </p>
       )}
 
       {tree && (
-        <section style={{ marginTop: '1.5rem' }}>
+        <Card tone="alt" as="section" className={styles.section}>
           <h2>Scan result</h2>
           <p>
             Source type: <code>{tree.sourceType}</code> &middot; {trackCount} track(s) found
           </p>
-        </section>
+        </Card>
       )}
 
       {plan && (
-        <section style={{ marginTop: '1.5rem' }}>
+        <section className={styles.section}>
           <h2>
             Plan preview ({plan.items.length} file(s), mode: {plan.mode})
           </h2>
-          <div style={{ maxHeight: 300, overflow: 'auto', border: '1px solid #ddd', borderRadius: 4 }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <div className={styles.tableWrap}>
+            <table className={styles.table}>
               <thead>
                 <tr>
-                  <th style={cellStyle}>Source</th>
-                  <th style={cellStyle}>Target</th>
+                  <th className={styles.cell}>Source</th>
+                  <th className={styles.cell}>Target</th>
                 </tr>
               </thead>
               <tbody>
                 {plan.items.map((item) => (
                   <tr key={`${item.trackId}-${item.targetPath}`}>
-                    <td style={cellStyle}>{item.sourcePath}</td>
-                    <td style={cellStyle}>{item.targetPath}</td>
+                    <td className={styles.cell}>{item.sourcePath}</td>
+                    <td className={styles.cell}>{item.targetPath}</td>
                   </tr>
                 ))}
               </tbody>
@@ -215,53 +219,17 @@ export default function App() {
       )}
 
       {report && (
-        <section style={{ marginTop: '1.5rem' }}>
+        <Card tone="alt" as="section" className={styles.section}>
           <h2>{report.dryRun ? 'Dry run report' : 'Execution report'}</h2>
-          <ul>
+          <ul className={styles.reportList}>
             {Object.entries(report.summary).map(([status, count]) => (
               <li key={status}>
                 {status}: {count}
               </li>
             ))}
           </ul>
-        </section>
+        </Card>
       )}
     </main>
   );
 }
-
-function FolderField(props: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  onBrowse: () => void;
-}) {
-  return (
-    <label>
-      {props.label}
-      <div style={{ display: 'flex', gap: '0.5rem', marginTop: 4 }}>
-        <input
-          style={inputStyle}
-          value={props.value}
-          onChange={(e) => props.onChange(e.target.value)}
-          placeholder="No folder chosen"
-        />
-        <button type="button" onClick={props.onBrowse}>
-          Browse&hellip;
-        </button>
-      </div>
-    </label>
-  );
-}
-
-const inputStyle: React.CSSProperties = {
-  flex: 1,
-  padding: '0.5rem',
-  boxSizing: 'border-box',
-};
-
-const cellStyle: React.CSSProperties = {
-  border: '1px solid #eee',
-  padding: '4px 8px',
-  textAlign: 'left',
-};
