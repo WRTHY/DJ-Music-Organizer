@@ -113,7 +113,71 @@ the local web app as an Electron desktop app.
   errors were expected sandbox noise (no D-Bus, no GPU, network egress
   restrictions in the build environment), nothing from the app's own code.
 
+## 2026-09-02 — End-state architecture: source of truth + "burn to flash"
+
+James's mental model, confirmed: the canonical tree isn't just a mirror to
+look at — it's meant to become the actual source of truth, with two
+distinct consumers of it:
+
+1. A **local library** on his PC — the canonical folder tree itself, which
+   `core`/`desktop` already build today (copy-only, non-destructive).
+2. A **"burn to flash"** export — take that canonical tree and write out a
+   real `_Serato_` folder (audio files + a freshly-generated crate
+   database) onto a target volume, so *any* Serato install, on *any*
+   machine, sees the full crate structure the moment that drive is
+   plugged in. This is the "plug and play on any Serato system, full
+   stop" outcome — no dependency on which machine's Serato database
+   things happen to live in.
+
+This is functionally the same problem Rekordbox already solves for itself
+with its native "export collection to a USB device" feature — Serato has
+no first-party equivalent, which is a big part of why a tool like this (or
+Lexicon) has value at all.
+
+**Two different "write Serato" operations — kept deliberately separate,
+because James has 5 years of library work riding on this:**
+
+- *Writing a fresh crate database onto a new/scratch volume* (burn to
+  flash) is comparatively low-risk: it never touches anything James
+  currently relies on. Worst case, a bad export is just deleted and
+  re-run.
+- *Pointing James's live, currently-in-use `_Serato_` database at the
+  canonical tree* — so that day-to-day sorting happens against the
+  canonical folder instead of today's setup — is a much later, much
+  higher-risk step, because it means writing into the one database Serato
+  actually uses right now.
+
+**Sequencing, in order, each gated on the previous one being solid:**
+
+1. Finish packaging/testing the current copy-only tool (already in
+   progress — see "Open questions" below).
+2. Build a **crate writer** — the inverse of the already-validated crate
+   *reader* — that can generate a valid `.crate` file set from a canonical
+   tree. Prove it by round-tripping: write, then read the result back with
+   our own trusted reader, and diff against the source tree. All of this
+   happens only against a scratch folder or a spare/test flash drive —
+   never James's real `E:\_Serato_` — until it's been proven correct many
+   times over.
+3. Ship "burn to flash" as its own feature: canonical tree (already on
+   James's PC) → a freshly-written `_Serato_` structure on a chosen target
+   volume. This is the deliverable that makes the library portable to any
+   Serato rig.
+4. Only after (2) and (3) are trustworthy: consider, as a separate and
+   explicitly opt-in step, pointing James's actual live Serato setup at
+   the canonical tree — and even then, back up the existing `_Serato_`
+   folder in full before that step ever runs.
+
+**Why this changes the track-identity question's priority.** "Burn to
+flash" needs to know what's already on a given flash drive versus what's
+new since the last burn, so re-burning doesn't mean re-copying the entire
+library every time. That makes the track-identity strategy (filename vs.
+content hash vs. tags — see below) no longer a someday question; it's a
+prerequisite for burn-to-flash being practical rather than just correct.
+
 ## Open questions / next decisions
+
+Full phase-by-phase plan, deliverables, and required testing now live in
+[`roadmap.md`](roadmap.md). Short version of what's immediately open:
 
 - Decide the canonical target root's location (same flash drive? a new
   drive/folder both Serato and Rekordbox get pointed at?).
@@ -124,9 +188,14 @@ the local web app as an Electron desktop app.
   — ties directly into James's existing Playwright/Electron testing
   experience, tracked as the next portfolio-relevant testing milestone.
 - Decide track-identity strategy for future syncing (filename? content
-  hash? tags?) once we're past "just copy the structure."
+  hash? tags?) — now a prerequisite for burn-to-flash (see above), not a
+  someday item.
+- Build the Serato crate **writer** and the "burn to flash" export flow
+  (see the 2026-09-02 entry above) — always against scratch/test volumes
+  first, never James's live `E:\_Serato_`.
 - Design the eventual Rekordbox side (Rekordbox's own database format is a
-  separate reverse-engineering problem from Serato's).
+  separate reverse-engineering problem from Serato's) — lower priority
+  now that Rekordbox already has its own native USB export.
 
 ## Manual repo setup (one-time)
 

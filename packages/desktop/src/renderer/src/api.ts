@@ -12,6 +12,7 @@ export type {
   OrganizePlan,
   OrganizePlanItem,
   OrganizeReport,
+  ScanProgress,
 } from '../../shared/ipcContract';
 
 export function selectFolder() {

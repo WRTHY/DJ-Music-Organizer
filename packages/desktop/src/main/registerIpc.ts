@@ -4,6 +4,7 @@ import type {
   ExecuteOrganizeArgs,
   PlanOrganizeArgs,
   ScanCrateDatabaseArgs,
+  ScanProgress,
 } from '../shared/ipcContract';
 import * as handlers from './ipcHandlers';
 
@@ -26,12 +27,19 @@ export function registerIpc(window: BrowserWindow): void {
     return handlers.detectSeratoSource(rootPath);
   });
 
-  ipcMain.handle(IPC_CHANNELS.scanFolderTree, async (_event, rootPath: string) => {
-    return handlers.scanFolderTree(rootPath);
+  ipcMain.handle(IPC_CHANNELS.scanFolderTree, async (event, rootPath: string) => {
+    // Forwards progress as it happens via event.sender.send -- a push,
+    // separate from this handler's own return value, which is how
+    // request/response IPC (invoke/handle) gets mid-call progress at all.
+    return handlers.scanFolderTree(rootPath, (progress: ScanProgress) => {
+      event.sender.send(IPC_CHANNELS.scanProgress, progress);
+    });
   });
 
-  ipcMain.handle(IPC_CHANNELS.scanCrateDatabase, async (_event, args: ScanCrateDatabaseArgs) => {
-    return handlers.scanCrateDatabase(args);
+  ipcMain.handle(IPC_CHANNELS.scanCrateDatabase, async (event, args: ScanCrateDatabaseArgs) => {
+    return handlers.scanCrateDatabase(args, (progress: ScanProgress) => {
+      event.sender.send(IPC_CHANNELS.scanProgress, progress);
+    });
   });
 
   ipcMain.handle(IPC_CHANNELS.planOrganize, async (_event, args: PlanOrganizeArgs) => {

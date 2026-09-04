@@ -60,6 +60,12 @@ describe('ipcHandlers', () => {
     expect(tree.root.children[0].tracks[0].filename).toBe('track1.mp3');
   });
 
+  it('forwards scan progress through the optional onProgress callback', async () => {
+    const events: unknown[] = [];
+    await scanFolderTree(sourceRoot, (p: unknown) => events.push(p));
+    expect(events.length).toBeGreaterThan(0);
+  });
+
   it('runs the full scan -> plan -> execute flow without any HTTP layer', async () => {
     const tree = await scanFolderTree(sourceRoot);
     const plan = await planOrganize({ tree, targetRoot, mode: 'copy' });

@@ -36,6 +36,24 @@ export interface CanonicalTree {
   sourceType: SeratoSourceType;
 }
 
+/**
+ * Progress reported mid-scan, so a caller (the desktop UI, ultimately)
+ * can show something better than "nothing happened for a while." `total`
+ * is only set when it's known up front -- a crate-database scan knows how
+ * many .crate files there are before it starts, so it can report a real
+ * percentage; a folder-tree scan doesn't know its folder count without a
+ * separate full pass, so it stays indeterminate (a running count only).
+ */
+export interface ScanProgress {
+  /** What's being processed right now -- a folder path or a crate filename. */
+  current: string;
+  processed: number;
+  total?: number;
+  tracksFound: number;
+}
+
+export type ScanProgressCallback = (progress: ScanProgress) => void;
+
 export function emptyNode(name: string, path: string[]): CanonicalNode {
   return { name, path, children: [], tracks: [] };
 }

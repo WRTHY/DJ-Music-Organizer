@@ -119,4 +119,20 @@ describe('readCrateDatabase', () => {
     const tree = await readCrateDatabase(subcratesDir, { volumeRoot });
     expect(tree.unresolvedCount).toBe(1); // does-not-exist.mp3
   });
+
+  it('reports progress once per crate file, with a known total (unlike the folder-tree reader)', async () => {
+    const events: Array<{ current: string; processed: number; total?: number; tracksFound: number }> = [];
+    await readCrateDatabase(subcratesDir, { volumeRoot }, (p) => events.push(p));
+
+    expect(events).toHaveLength(2); // House.crate, House%%Deep House.crate
+    // Unlike folder-tree scans, every crate file is known up front, so
+    // this is a real percentage from the very first event.
+    expect(events.every((e) => e.total === 2)).toBe(true);
+    expect(events.map((e) => e.processed)).toEqual([1, 2]);
+    expect(events.map((e) => e.current).sort()).toEqual(
+      ['House%%Deep House.crate', 'House.crate'].sort()
+    );
+    // One track per crate here, so the final cumulative count is 2.
+    expect(events[events.length - 1].tracksFound).toBe(2);
+  });
 });

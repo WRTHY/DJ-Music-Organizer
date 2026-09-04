@@ -1,5 +1,5 @@
-import { contextBridge, ipcRenderer } from 'electron';
-import { IPC_CHANNELS, MloApi } from '../shared/ipcContract';
+import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
+import { IPC_CHANNELS, MloApi, ScanProgress } from '../shared/ipcContract';
 
 /**
  * The renderer's entire view of the outside world. `contextIsolation:
@@ -16,6 +16,14 @@ const api: MloApi = {
   detectSeratoSource: (rootPath) => ipcRenderer.invoke(IPC_CHANNELS.detectSeratoSource, rootPath),
   scanFolderTree: (rootPath) => ipcRenderer.invoke(IPC_CHANNELS.scanFolderTree, rootPath),
   scanCrateDatabase: (args) => ipcRenderer.invoke(IPC_CHANNELS.scanCrateDatabase, args),
+  onScanProgress: (callback) => {
+    // ipcRenderer itself is never exposed to the renderer (that's the
+    // whole point of contextIsolation) -- this wraps subscribe/unsubscribe
+    // so the renderer only ever sees a plain callback-in, cleanup-out API.
+    const listener = (_event: IpcRendererEvent, progress: ScanProgress) => callback(progress);
+    ipcRenderer.on(IPC_CHANNELS.scanProgress, listener);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.scanProgress, listener);
+  },
   planOrganize: (args) => ipcRenderer.invoke(IPC_CHANNELS.planOrganize, args),
   executeOrganize: (args) => ipcRenderer.invoke(IPC_CHANNELS.executeOrganize, args),
 };

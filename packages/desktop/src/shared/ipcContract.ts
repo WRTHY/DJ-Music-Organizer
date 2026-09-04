@@ -5,13 +5,14 @@ import type {
   OrganizePlan,
   OrganizePlanItem,
   OrganizeReport,
+  ScanProgress,
 } from '@mlo/core';
 
 // Re-exported so renderer code imports everything it needs from this one
 // shared file, rather than reaching past the IPC boundary into @mlo/core
 // directly (the renderer's tsconfig doesn't even include core's types —
 // this file is the deliberate seam between them).
-export type { CanonicalNode, CanonicalTree, OrganizeMode, OrganizePlan, OrganizePlanItem, OrganizeReport };
+export type { CanonicalNode, CanonicalTree, OrganizeMode, OrganizePlan, OrganizePlanItem, OrganizeReport, ScanProgress };
 
 /**
  * The whole IPC surface between the renderer and the main process, in one
@@ -28,6 +29,12 @@ export const IPC_CHANNELS = {
   detectSeratoSource: 'serato:detect',
   scanFolderTree: 'serato:scanFolderTree',
   scanCrateDatabase: 'serato:scanCrateDatabase',
+  // Not invoked directly -- main pushes events on this channel (via
+  // webContents.send) while a scanFolderTree/scanCrateDatabase call is
+  // still in flight. invoke/handle is strictly request/response, so a
+  // long scan needs this separate push channel for progress; the final
+  // result still comes back as the invoke's own return value.
+  scanProgress: 'serato:scanProgress',
   planOrganize: 'organize:plan',
   executeOrganize: 'organize:execute',
 } as const;
@@ -62,6 +69,13 @@ export interface MloApi {
   detectSeratoSource(rootPath: string): Promise<DetectSeratoSourceResult>;
   scanFolderTree(rootPath: string): Promise<CanonicalTree>;
   scanCrateDatabase(args: ScanCrateDatabaseArgs): Promise<CanonicalTree & { unresolvedCount: number }>;
+  /**
+   * Subscribes to progress events for whichever scan is currently in
+   * flight. Returns an unsubscribe function (a React useEffect cleanup
+   * fits this directly). Not request/response like the rest of this API
+   * -- see the scanProgress channel comment above.
+   */
+  onScanProgress(callback: (progress: ScanProgress) => void): () => void;
   planOrganize(args: PlanOrganizeArgs): Promise<OrganizePlan>;
   executeOrganize(args: ExecuteOrganizeArgs): Promise<OrganizeReport>;
 }

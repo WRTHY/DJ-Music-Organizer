@@ -4,6 +4,7 @@ import {
   planFromCanonicalTree,
   readCrateDatabase,
   readFolderTree,
+  type ScanProgressCallback,
 } from '@mlo/core';
 import type {
   DetectSeratoSourceResult,
@@ -25,12 +26,17 @@ export async function detectSeratoSource(rootPath: string): Promise<DetectSerato
   return detectSourceType(rootPath);
 }
 
-export async function scanFolderTree(rootPath: string) {
-  return readFolderTree(rootPath);
+// `onProgress` is plumbed through as a plain optional callback -- same
+// dependency-injection shape as everything else here. registerIpc.ts is
+// the only place that ever supplies one for real (a closure that calls
+// event.sender.send(...)); tests can pass a mock and assert on it with no
+// Electron involved at all.
+export async function scanFolderTree(rootPath: string, onProgress?: ScanProgressCallback) {
+  return readFolderTree(rootPath, onProgress);
 }
 
-export async function scanCrateDatabase(args: ScanCrateDatabaseArgs) {
-  return readCrateDatabase(args.subcratesDir, { volumeRoot: args.volumeRoot });
+export async function scanCrateDatabase(args: ScanCrateDatabaseArgs, onProgress?: ScanProgressCallback) {
+  return readCrateDatabase(args.subcratesDir, { volumeRoot: args.volumeRoot }, onProgress);
 }
 
 export async function planOrganize(args: PlanOrganizeArgs) {

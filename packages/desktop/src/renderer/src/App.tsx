@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   CanonicalTree,
   OrganizePlan,
   OrganizeReport,
+  ScanProgress,
   executeOrganize,
   planOrganize,
   scanCrateDatabase,
@@ -12,6 +13,7 @@ import {
 import { Button } from './components/atoms/Button/Button';
 import { Card } from './components/atoms/Card/Card';
 import { FolderField } from './components/molecules/FolderField/FolderField';
+import { ProgressBar } from './components/atoms/ProgressBar/ProgressBar';
 import styles from './App.module.css';
 
 // One entry per user-triggered action. Tracking *which* action is running
@@ -52,6 +54,12 @@ export default function App() {
 
   const [loadingAction, setLoadingAction] = useState<ActionKey | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
+
+  // Subscribed for the app's lifetime, not just while a scan is running --
+  // there's no harm in an idle listener, and it avoids a subscribe/
+  // unsubscribe dance racing against handleScan's own state updates.
+  useEffect(() => window.mlo.onScanProgress(setScanProgress), []);
 
   const trackCount = useMemo(() => (tree ? countTracks(tree) : 0), [tree]);
   const canScan = scanMode === 'folders' ? !!rootPath : !!subcratesDir && !!volumeRoot;
@@ -75,8 +83,9 @@ export default function App() {
     if (path) onPicked(path);
   };
 
-  const handleScan = () =>
-    run(
+  const handleScan = () => {
+    setScanProgress(null);
+    return run(
       'scan',
       () => (scanMode === 'folders' ? scanFolderTree(rootPath) : scanCrateDatabase(subcratesDir, volumeRoot)),
       (result) => {
@@ -85,6 +94,7 @@ export default function App() {
         setReport(null);
       }
     );
+  };
 
   const handlePlan = () =>
     run(
@@ -187,6 +197,22 @@ export default function App() {
             {loadingAction === 'execute' ? 'Copying…' : 'Execute copy'}
           </Button>
         </div>
+
+        {loadingAction === 'scan' && scanProgress && (
+          <ProgressBar
+            label={
+              scanMode === 'crates'
+                ? `Reading ${scanProgress.current}`
+                : `Scanning ${scanProgress.current}`
+            }
+            detail={
+              scanProgress.total
+                ? `${scanProgress.processed} / ${scanProgress.total} crates · ${scanProgress.tracksFound} tracks`
+                : `${scanProgress.tracksFound} tracks found`
+            }
+            fraction={scanProgress.total ? scanProgress.processed / scanProgress.total : undefined}
+          />
+        )}
       </section>
 
       {error && (

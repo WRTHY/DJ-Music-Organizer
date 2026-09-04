@@ -41,6 +41,12 @@ packages/
 docs/       architecture notes, decisions, format notes
 ```
 
+## Roadmap
+
+The long-term plan — phases, concrete deliverables, and the testing
+required at each stage before the next is trusted — lives in
+[`docs/roadmap.md`](docs/roadmap.md).
+
 ## Status
 
 `core`: folder-tree reader, a crate-database reader validated against a

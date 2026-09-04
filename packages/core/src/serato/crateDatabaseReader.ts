@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { CanonicalNode, CanonicalTree, TrackRef, emptyNode } from '../types';
+import { CanonicalNode, CanonicalTree, ScanProgressCallback, TrackRef, emptyNode } from '../types';
 import { idForPath } from './hash';
 
 /**
@@ -127,15 +127,18 @@ export interface CrateDatabaseOptions {
  */
 export async function readCrateDatabase(
   subcratesDir: string,
-  options: CrateDatabaseOptions
+  options: CrateDatabaseOptions,
+  onProgress?: ScanProgressCallback
 ): Promise<CanonicalTree & { unresolvedCount: number }> {
   const entries = await fs.readdir(subcratesDir, { withFileTypes: true });
   const crateFiles = entries.filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.crate'));
 
   const root = emptyNode('', []);
   let unresolvedCount = 0;
+  let tracksFound = 0;
 
-  for (const entry of crateFiles) {
+  for (let i = 0; i < crateFiles.length; i++) {
+    const entry = crateFiles[i];
     const parsed = await parseCrateFile(path.join(subcratesDir, entry.name));
     const node = ensurePath(root, parsed.segments);
 
@@ -154,7 +157,13 @@ export async function readCrateDatabase(
         ext: path.extname(resolved).toLowerCase(),
       };
       node.tracks.push(track);
+      tracksFound += 1;
     }
+
+    // Known total here (unlike the folder-tree reader) -- every crate file
+    // is already listed before the loop starts -- so this is a real
+    // percentage, not just a running count.
+    onProgress?.({ current: entry.name, processed: i + 1, total: crateFiles.length, tracksFound });
   }
 
   return {
