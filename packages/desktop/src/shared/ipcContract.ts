@@ -56,6 +56,14 @@ export interface PlanOrganizeArgs {
   tree: CanonicalTree;
   targetRoot: string;
   mode: OrganizeMode;
+  /**
+   * Node keys (path segments joined with '/', matching @mlo/core's
+   * organizer/selection.ts `nodeKey`) the user deselected in the
+   * SelectionTree UI. Excluding a node excludes its whole subtree.
+   * Omitted or empty means "everything selected" -- the original,
+   * unfiltered behavior.
+   */
+  excludedKeys?: string[];
 }
 
 export interface ExecuteOrganizeArgs {

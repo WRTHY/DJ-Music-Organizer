@@ -1,0 +1,68 @@
+.tree {
+  font-size: 13px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 3px 0;
+  border-radius: var(--radius-sm);
+}
+
+.row:hover {
+  background: var(--code-bg);
+}
+
+.toggle {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+  padding: 0;
+  font-size: 10px;
+}
+
+.toggleSpacer {
+  width: 16px;
+  flex: none;
+}
+
+.checkbox {
+  flex: none;
+  accent-color: var(--accent);
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+}
+
+.checkbox:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.name {
+  color: var(--text-h);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.name.disabled {
+  color: var(--text);
+  opacity: 0.6;
+}
+
+.count {
+  color: var(--text);
+  font-size: 11px;
+  flex: none;
+  margin-left: auto;
+  padding-left: var(--space-2);
+}

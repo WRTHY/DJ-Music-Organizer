@@ -31,8 +31,13 @@ export function scanCrateDatabase(subcratesDir: string, volumeRoot: string) {
   return window.mlo.scanCrateDatabase({ subcratesDir, volumeRoot });
 }
 
-export function planOrganize(tree: CanonicalTree, targetRoot: string, mode: OrganizeMode) {
-  return window.mlo.planOrganize({ tree, targetRoot, mode });
+export function planOrganize(
+  tree: CanonicalTree,
+  targetRoot: string,
+  mode: OrganizeMode,
+  excludedKeys?: string[]
+) {
+  return window.mlo.planOrganize({ tree, targetRoot, mode, excludedKeys });
 }
 
 export function executeOrganize(plan: OrganizePlan, dryRun: boolean) {

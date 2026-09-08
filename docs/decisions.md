@@ -113,6 +113,36 @@ the local web app as an Electron desktop app.
   errors were expected sandbox noise (no D-Bus, no GPU, network egress
   restrictions in the build environment), nothing from the app's own code.
 
+## 2026-09-08 — Selective copy: a toggle tree over the scanned library
+
+James's call: with the tool now doing full writes (copying real files), he
+wants real control over what gets copied, not just an all-or-nothing
+scan-to-plan pipeline. Added a checkbox tree over the scanned crates/
+folders (`packages/desktop/src/renderer/src/components/molecules/
+SelectionTree`) — unchecking a crate or folder excludes it, and its whole
+subtree, from the plan. There's no way to exclude a parent while keeping
+one of its children; a child under an excluded parent shows disabled
+rather than supporting an independent "carve-out," which keeps the
+exclusion state small (one key per top-most excluded node) and predictable
+rather than needing to track re-inclusions separately.
+
+**Where the filtering actually happens, and why:** `@mlo/core` gained a
+new `organizer/selection.ts` (`filterTreeBySelection`, `nodeKey`) — a
+pure, tested function that drops excluded subtrees from a `CanonicalTree`.
+The renderer only ever manages *which keys are checked*; the IPC contract
+carries that as a plain `excludedKeys: string[]`, and `planOrganize`
+(main process) does the actual filtering before calling
+`planFromCanonicalTree`. This keeps the same rule the project has followed
+throughout: real logic lives in `core`, tested with Jest; the renderer is
+presentation plus thin IPC calls. It also means a filtered plan is real,
+not cosmetic — `plan.items` reflects exactly what's checked, verified by
+an IPC-level test (`ipcHandlers.test.ts`) proving `excludedKeys` actually
+shrinks the resulting plan.
+
+Nodes default to selected (nothing excluded) on a fresh scan, so this is
+additive — the existing "copy everything" behavior still happens if the
+tree is left untouched.
+
 ## 2026-09-02 — End-state architecture: source of truth + "burn to flash"
 
 James's mental model, confirmed: the canonical tree isn't just a mirror to

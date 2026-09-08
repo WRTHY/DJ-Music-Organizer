@@ -14,6 +14,7 @@ import { Button } from './components/atoms/Button/Button';
 import { Card } from './components/atoms/Card/Card';
 import { FolderField } from './components/molecules/FolderField/FolderField';
 import { ProgressBar } from './components/atoms/ProgressBar/ProgressBar';
+import { SelectionTree } from './components/molecules/SelectionTree/SelectionTree';
 import styles from './App.module.css';
 
 // One entry per user-triggered action. Tracking *which* action is running
@@ -36,6 +37,16 @@ function countTracks(tree: CanonicalTree): number {
   return count;
 }
 
+// Mirrors the "excluded subtree" rule from @mlo/core's filterTreeBySelection
+// (can't import it here -- see the IPC-seam comment in ipcContract.ts) so
+// the summary line above the tree can show a real "X of Y selected" count
+// without waiting on a round-trip through planOrganize.
+function countSelectedTracks(node: CanonicalTree['root'], excludedKeys: Set<string>): number {
+  const key = node.path.join('/');
+  if (excludedKeys.has(key)) return 0;
+  return node.tracks.length + node.children.reduce((sum: number, c: CanonicalTree['root']) => sum + countSelectedTracks(c, excludedKeys), 0);
+}
+
 export default function App() {
   const [scanMode, setScanMode] = useState<ScanMode>('crates');
 
@@ -49,6 +60,7 @@ export default function App() {
   const [mode] = useState<'copy' | 'move'>('copy'); // move is a follow-up, see docs/decisions.md
 
   const [tree, setTree] = useState<CanonicalTree | null>(null);
+  const [excludedKeys, setExcludedKeys] = useState<Set<string>>(new Set());
   const [plan, setPlan] = useState<OrganizePlan | null>(null);
   const [report, setReport] = useState<OrganizeReport | null>(null);
 
@@ -62,6 +74,10 @@ export default function App() {
   useEffect(() => window.mlo.onScanProgress(setScanProgress), []);
 
   const trackCount = useMemo(() => (tree ? countTracks(tree) : 0), [tree]);
+  const selectedCount = useMemo(
+    () => (tree ? countSelectedTracks(tree.root, excludedKeys) : 0),
+    [tree, excludedKeys]
+  );
   const canScan = scanMode === 'folders' ? !!rootPath : !!subcratesDir && !!volumeRoot;
   const isBusy = loadingAction !== null;
 
@@ -90,6 +106,7 @@ export default function App() {
       () => (scanMode === 'folders' ? scanFolderTree(rootPath) : scanCrateDatabase(subcratesDir, volumeRoot)),
       (result) => {
         setTree(result);
+        setExcludedKeys(new Set());
         setPlan(null);
         setReport(null);
       }
@@ -101,7 +118,7 @@ export default function App() {
       'plan',
       () => {
         if (!tree) throw new Error('Scan a library first.');
-        return planOrganize(tree, targetRoot, mode);
+        return planOrganize(tree, targetRoot, mode, Array.from(excludedKeys));
       },
       (result) => {
         setPlan(result);
@@ -225,8 +242,18 @@ export default function App() {
         <Card tone="alt" as="section" className={styles.section}>
           <h2>Scan result</h2>
           <p>
-            Source type: <code>{tree.sourceType}</code> &middot; {trackCount} track(s) found
+            Source type: <code>{tree.sourceType}</code> &middot;{' '}
+            {selectedCount === trackCount
+              ? `${trackCount} track(s) found`
+              : `${selectedCount} of ${trackCount} track(s) selected`}
           </p>
+          <p className={styles.subtitle}>
+            Uncheck a crate or folder to leave it out of the copy — unchecking a parent leaves out
+            everything inside it too.
+          </p>
+          <div className={styles.tableWrap}>
+            <SelectionTree root={tree.root} excludedKeys={excludedKeys} onChange={setExcludedKeys} />
+          </div>
         </Card>
       )}
 

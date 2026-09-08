@@ -66,6 +66,19 @@ describe('ipcHandlers', () => {
     expect(events.length).toBeGreaterThan(0);
   });
 
+  it('planOrganize excludes deselected nodes when excludedKeys is given', async () => {
+    await fs.mkdir(path.join(sourceRoot, 'Techno'), { recursive: true });
+    await fs.writeFile(path.join(sourceRoot, 'Techno', 'track2.mp3'), 'content-2');
+
+    const tree = await scanFolderTree(sourceRoot);
+    const fullPlan = await planOrganize({ tree, targetRoot, mode: 'copy' });
+    expect(fullPlan.items).toHaveLength(2);
+
+    const filteredPlan = await planOrganize({ tree, targetRoot, mode: 'copy', excludedKeys: ['Techno'] });
+    expect(filteredPlan.items).toHaveLength(1);
+    expect(filteredPlan.items[0].sourcePath).toContain('House');
+  });
+
   it('runs the full scan -> plan -> execute flow without any HTTP layer', async () => {
     const tree = await scanFolderTree(sourceRoot);
     const plan = await planOrganize({ tree, targetRoot, mode: 'copy' });

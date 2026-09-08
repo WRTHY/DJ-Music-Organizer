@@ -100,6 +100,13 @@ Deliverables:
   target drive, copy only what's new or changed, rewrite only the crates
   that changed — so re-burning a 5-year library isn't a full re-copy every
   time.
+- **Generalizes beyond burn-to-flash** (James, 2026-09-08): the same
+  diff-against-the-destination idea applies to the ordinary copy-to-
+  canonical-tree step too, not just burning to a flash drive — compare
+  what's already at the target against what the scan found, and only
+  actually copy what's new or changed there as well. Same content-hash
+  identity work covers both; this is the reason track-identity moved up
+  to a Phase 3 prerequisite rather than staying deferred.
 - UI flow: pick a target drive → preview (what's new, what's unchanged) →
   burn → automatic verification pass (read back what was written, diff
   against source) before calling it done.

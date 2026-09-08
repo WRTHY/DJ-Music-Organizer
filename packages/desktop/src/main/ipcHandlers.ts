@@ -1,6 +1,7 @@
 import {
   detectSourceType,
   executePlan,
+  filterTreeBySelection,
   planFromCanonicalTree,
   readCrateDatabase,
   readFolderTree,
@@ -45,7 +46,16 @@ export async function planOrganize(args: PlanOrganizeArgs) {
   // path itself. The old Express version re-read rootPath here and only
   // ever used the folder-tree reader, which meant crate-mode scans could
   // never actually be planned. Fixed while porting.
-  return planFromCanonicalTree(args.tree, args.targetRoot, args.mode);
+  //
+  // excludedKeys, when present, is applied here rather than trusted from
+  // the renderer as a pre-filtered tree -- keeps the actual filtering
+  // logic in one tested place (core), with the renderer only ever
+  // managing which keys are checked/unchecked.
+  const tree =
+    args.excludedKeys && args.excludedKeys.length > 0
+      ? filterTreeBySelection(args.tree, new Set(args.excludedKeys))
+      : args.tree;
+  return planFromCanonicalTree(tree, args.targetRoot, args.mode);
 }
 
 export async function executeOrganize(args: ExecuteOrganizeArgs) {
