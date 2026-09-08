@@ -2,6 +2,40 @@
 
 Lightweight ADR-style log of the choices behind this project. Newest first.
 
+## 2026-09-08 — One `npm run verify` for everything
+
+James's call: checking build/typecheck/tests/e2e as separate manual steps
+doesn't scale once that's the normal pre-"call it done" routine -- one
+command should run the whole chain. Added:
+
+- `packages/core`: a `typecheck` script (`tsc --noEmit`), matching the one
+  `packages/desktop` already had -- previously only desktop could be
+  typechecked on its own without a full `tsc` emit.
+- Root `package.json`: `typecheck` (fans out to both workspaces, same
+  `--if-present` pattern the existing `build`/`test` scripts already use)
+  and `test:e2e` (delegates to `packages/desktop`, the only workspace with
+  a UI to e2e-test).
+- Root `verify`: `build && typecheck && test && test:e2e`, in that order
+  -- build has to come first since desktop's typecheck and the e2e run
+  both need `@mlo/core`'s compiled `dist/` to exist, and e2e specifically
+  needs a fresh `out/` to launch against.
+
+Confirmed **`npm test` alone was not equivalent to this** -- it only runs
+each workspace's `test` script (the two Jest suites), never `build`,
+`typecheck`, or `test:e2e`. `npm run verify` is the actual "did I break
+anything" command going forward; plain `npm test` stays useful on its own
+for a fast unit-test-only loop while iterating.
+
+Ran the new scripts individually against this session's environment to
+confirm the wiring: `build`, `typecheck` (clean on both packages -- no
+errors, including desktop's renderer tsconfig), and `test` (36/36
+passing) all work end to end. `test:e2e`'s underlying `playwright test`
+still can't actually launch on this session's Linux bridge for the
+platform/network reasons noted in the previous entry -- that part of
+`verify` needs to be run on James's own machine, same as before; this
+change doesn't remove that gap, it just makes it the last step of one
+command instead of a step you'd remember to run separately.
+
 ## 2026-09-08 — First Playwright `_electron` e2e test
 
 Added the first real UI-driving e2e test (task #17, part of Phase 1):
