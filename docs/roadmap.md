@@ -135,17 +135,35 @@ solid. Before this is ever run for real, the rollback path (restore from
 the automatic backup) gets tested and confirmed working — on its own,
 before it's ever needed.
 
-## Phase 5 — Rekordbox side (research first)
+## Phase 5 — Rekordbox side (research underway, findings better than expected)
 
-Rekordbox's library format is a different, likely harder problem than
-Serato's — modern Rekordbox versions store their library in an encrypted
-SQLite database rather than Serato's plain binary crate files, which is a
-meaningfully bigger reverse-engineering lift. This phase starts with
-research and validation (same pattern as Serato: build a read-only reader
-first, validate it against your real Rekordbox library) before any scope
-gets committed to beyond that. A writer for Rekordbox, if it turns out to
-be feasible at all, follows the same isolated-then-proven pattern as
-Serato's did.
+Rekordbox actually has two library formats, not one, and they're not
+equally hard. The USB/CDJ export (`export.pdb` + `exportExt.pdb`) is
+**not encrypted** and has been validated byte-for-byte against a real
+file James provided (from a flash drive burned by his old system) —
+page-chained tables, row-group indexing, real track paths extracted and
+confirmed correct against the community-documented format (Deep
+Symmetry's djl-analysis project). This is genuinely tractable, closer to
+the Serato crate work than originally expected. The *other* format,
+`exportLibrary.db`, is confirmed encrypted (no readable header) — that's
+where the original "likely harder" caution still applies, and it stays
+out of scope; nothing here touches it.
+
+Read-side next step: port the validated prototype into a real, tested
+`packages/core/src/rekordbox/` reader, same shape as the Serato readers.
+
+Write-side has a decision pending (task #22): template-modify a real,
+valid export by appending new pages to its existing table chains
+(favored — produces a portable USB export symmetric with Serato's
+burn-to-flash, needs no Rekordbox installation), versus rekordbox XML (an
+official interchange format, but with real limits — no MyTags, no memory
+cue colors, no loop data, can't express deletions). Notably, rekordbox
+XML is literally how Lexicon syncs to older Rekordbox versions per its
+own documentation — and Lexicon's own docs say it moved to a different,
+more direct method for modern Rekordbox, which by elimination means
+touching Rekordbox's live local database. That's explicitly not a path
+this project is taking, for the same reason Serato's live database stays
+untouched until Phase 4: it's the thing someone actually depends on.
 
 ## Phase 6 — Beyond porting: library management features
 

@@ -113,6 +113,62 @@ the local web app as an Electron desktop app.
   errors were expected sandbox noise (no D-Bus, no GPU, network egress
   restrictions in the build environment), nothing from the app's own code.
 
+## 2026-09-08 — Rekordbox research: the read side is real, the write side has options
+
+James connected `F:\PIONEER` (a flash drive burned by his old library
+system) to validate Phase 5 assumptions against real data, same pattern as
+the Serato work. Two distinct formats found, and the picture is better
+than the original caution suggested:
+
+**`export.pdb` + `exportExt.pdb` (the classic USB-export/CDJ format) —
+NOT encrypted, and validated byte-for-byte against the real file.**
+Cross-referenced the binary layout against Deep Symmetry's djl-analysis
+documentation (the authoritative community reverse-engineering reference —
+see sources below), then wrote a Python prototype and ran it against
+James's actual `export.pdb`: paged (4096-byte pages) with tables as
+linked lists via `next_page`, rows indexed by 36-byte groups built
+backward from the end of each page (16 rows/group, a presence bitmask,
+slots read in reverse order), row address = `page_offset + 0x28 +
+row_offset`. Confirmed correct by finding the track row's fixed subtype
+marker (`0x0024`) at every computed address across multiple pages, and by
+recovering real track paths (e.g.
+`/Contents/Phazed/Wildfire/50 - Phazed - Wildfire.mp3`). This is
+genuinely tractable — closer in spirit to the Serato crate work than the
+"probably an encrypted database" caution from the original roadmap entry.
+
+**`exportLibrary.db` — genuinely encrypted**, confirming the other half
+of that original caution. No recognizable header (real SQLite files start
+with `SQLite format 3\0`; this doesn't), consistent with SQLCipher-style
+full-file encryption. Left alone — no attempt made to decrypt or otherwise
+access it.
+
+**Write side: three options surfaced, one favored.** James asked directly
+whether we could just modify an existing burn rather than generate a
+Rekordbox export from nothing — yes, and it's the better strategy:
+tables are page-chains, so new tracks/playlist entries can likely be added
+by *appending* new pages to a real, valid export's existing chains,
+inheriting all the correctly-formed supporting tables (artists, albums,
+genres, etc.) rather than reconstructing everything. One open unknown:
+whether the index page found at the head of the tracks table matters for
+CDJ/Rekordbox lookups, or whether the `next_page` chain alone is
+sufficient — needs an answer before committing. The alternative
+researched was **rekordbox XML**, an official documented interchange
+format — notably, this is literally how Lexicon (the tool this project
+is trying to beat) syncs to Rekordbox 5, per Lexicon's own docs. It has
+real limits (no MyTags, no memory cue colors, no loop data, can't handle
+deletions, and Lexicon's own docs call it "very slow"), and Lexicon
+itself uses "a Direct method that skips the XML" for Rekordbox 6/7 —
+which, by process of elimination, means touching Rekordbox's own live
+local (encrypted) collection database. That path is explicitly not being
+pursued here, for the same reason Serato's live database stays untouched
+until much later: it's the one thing a person actually depends on day to
+day. Current lean is PDB template-modification — see task #22 for the
+full writeup and the decision still to make.
+
+Sources consulted: [Database Exports — DJ Link Ecosystem Analysis](https://djl-analysis.deepsymmetry.org/rekordbox-export-analysis/exports.html),
+[rekordcrate (Holzhaus)](https://github.com/Holzhaus/rekordcrate),
+[Lexicon: Sync to Rekordbox (XML)](https://www.lexicondj.com/manual/sync-rekordbox-xml).
+
 ## 2026-09-08 — Selective copy: a toggle tree over the scanned library
 
 James's call: with the tool now doing full writes (copying real files), he
