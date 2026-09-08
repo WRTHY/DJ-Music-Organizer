@@ -2,6 +2,45 @@
 
 Lightweight ADR-style log of the choices behind this project. Newest first.
 
+## 2026-09-08 — Rekordbox reader: from validated prototype to real, tested code
+
+Ported the Python validation prototype (previous entry) into
+`packages/core/src/rekordbox/pdbReader.ts`, matching the shape of the
+existing Serato readers: an async `readPdbTracks(path)` wrapper around a
+pure `parsePdbTracks(buffer)` function, so the parsing logic itself is
+synchronous and directly testable without touching disk.
+
+- **Tests use synthetic buffers, not James's real export files.** A small
+  buffer-builder (`__tests__/pdbReader.test.ts`) constructs minimal but
+  format-correct pages by hand — same reasoning as the Serato crate
+  tests: real personal library data never belongs in the repo's fixtures,
+  and a synthetic buffer that exercises every code path (short strings,
+  long/UTF-16LE strings, multi-row pages, multi-page chains, index-page
+  skipping, an empty tracks table) is a stronger regression test anyway,
+  since it's not hostage to whatever happens to be in one real file.
+- **A real bug the tests caught immediately**: the first version of the
+  non-ASCII test case only marked the *title* field as long/UTF-16LE and
+  left `filePath`/`fileName` on the short/ASCII encoding, even though
+  both also contained "clé" — so the test buffer itself silently mangled
+  the accented character before the parser ever ran (`clé` → `cli`,
+  ASCII-truncating the é). Fixed in the test builder, not the reader —
+  this was a synthetic-data bug, not a parsing bug, and it's a good
+  example of why round-tripping through a hand-built encoder is worth
+  the extra care. All 6 tests pass; the full `core` suite (30 tests) is
+  green.
+- **Scope check**: this reads flat track rows only — id, file path, file
+  name, title. Playlist/crate hierarchy (the Rekordbox equivalent of
+  Serato subcrates) is not implemented yet; the PDB format almost
+  certainly stores it as its own tables (playlist entries reference
+  track ids), but that hasn't been validated against real data the way
+  track rows have. Next Rekordbox step, when picked back up: extend the
+  reader to the playlist tables, then decide the write-strategy question
+  (task #22).
+- `packages/core`'s `dist/` was rebuilt (`tsc`) so the new export is
+  available to consumers; nothing in `desktop` references it yet — this
+  is core-only, unwired, by design (mirrors how the Serato readers landed
+  before the UI caught up to them).
+
 ## 2026-09-01 — Initial scope and stack
 
 - **Goal**: a shared, tool-agnostic folder structure that both Serato and

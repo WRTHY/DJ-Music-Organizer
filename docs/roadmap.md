@@ -135,7 +135,7 @@ solid. Before this is ever run for real, the rollback path (restore from
 the automatic backup) gets tested and confirmed working — on its own,
 before it's ever needed.
 
-## Phase 5 — Rekordbox side (research underway, findings better than expected)
+## Phase 5 — Rekordbox side (read side ported to real code; write side pending)
 
 Rekordbox actually has two library formats, not one, and they're not
 equally hard. The USB/CDJ export (`export.pdb` + `exportExt.pdb`) is
@@ -149,8 +149,18 @@ the Serato crate work than originally expected. The *other* format,
 where the original "likely harder" caution still applies, and it stays
 out of scope; nothing here touches it.
 
-Read-side next step: port the validated prototype into a real, tested
-`packages/core/src/rekordbox/` reader, same shape as the Serato readers.
+**Read side: done for flat tracks, not yet for playlists.** The
+validated prototype is now real, tested code —
+`packages/core/src/rekordbox/pdbReader.ts` — same async-wrapper/pure-
+parser shape as the Serato readers, with a synthetic-buffer test suite
+(`__tests__/pdbReader.test.ts`, 6 tests, all passing) covering short and
+long/UTF-16LE string encoding, multi-row pages, multi-page chain
+traversal, and index-page skipping. It extracts id/filePath/fileName/
+title per track; it does not yet read the playlist/crate-hierarchy
+tables (Rekordbox's equivalent of Serato subcrates), which is the
+natural next slice before this is genuinely comparable to the Serato
+reader's coverage. Not yet wired into IPC/UI — core-only so far, same
+pattern the Serato readers followed before the desktop app caught up.
 
 Write-side has a decision pending (task #22): template-modify a real,
 valid export by appending new pages to its existing table chains
