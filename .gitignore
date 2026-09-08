@@ -10,3 +10,7 @@ tmp/
 .vite/
 *.tsbuildinfo
 out/
+test-results/
+playwright-report/
+_to_delete/
+electron.vite.config.*.mjs

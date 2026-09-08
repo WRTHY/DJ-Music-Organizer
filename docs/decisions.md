@@ -2,6 +2,47 @@
 
 Lightweight ADR-style log of the choices behind this project. Newest first.
 
+## 2026-09-08 — First Playwright `_electron` e2e test
+
+Added the first real UI-driving e2e test (task #17, part of Phase 1):
+`packages/desktop/playwright.config.ts` + `packages/desktop/e2e/
+scan-plan-execute.spec.ts`, using Playwright's `_electron` support to
+launch the actual built app and drive the whole scan → plan → dry run →
+execute pipeline through its real UI, in folder-tree mode, against a
+small checked-in synthetic fixture (`e2e/fixtures/synthetic-library/` —
+5 tracks across a nested folder tree; never James's real `E:\_Serato_`,
+same fixture discipline as the Jest suites). Asserts against the actual
+filesystem afterward — dry run must not create any files, execute must
+create exactly the files the canonical tree implies, at the exact paths
+`planFromCanonicalTree` computes.
+
+**One real, load-bearing pattern worth calling out**: the "Browse…"
+buttons call `dialog.showOpenDialog`, a real native OS dialog Playwright
+can't drive directly. The test stubs it in the Electron main process
+(`electronApp.evaluate(({ dialog }) => { dialog.showOpenDialog = ... })`,
+the documented Playwright/Electron pattern) with a small queue of paths,
+resolved in the order the UI triggers them — source folder, then target
+root.
+
+**Verified as far as this environment allows, not further — an honest
+gap, not a finished checkbox.** `packages/desktop/node_modules/electron`
+here is the Windows build (this repo lives on a OneDrive folder normally
+built from James's Windows machine), and this session's remote-device
+shell is a separate Linux VM — genuinely can't execute a Windows `.exe`.
+Attempted to install a Linux-platform Electron into a separate scratch
+directory to at least prove the test runs end-to-end; that download goes
+through `github.com`, which isn't reachable from this shell's network
+egress either. What *is* verified here: `npx playwright test --list`
+discovers the spec correctly, and a standalone `tsc --noEmit` pass over
+the spec and config is clean — so the test is structurally sound and
+type-correct, but it has not yet actually launched the app and watched
+it pass. **James needs to run `npm run test:e2e` (builds, then runs
+Playwright) from `packages/desktop` on his own machine** to get the
+first real pass/fail signal — this is the same "needs his terminal"
+limitation already noted for the installer (task #11), for the same
+underlying reason (this bridge can't run his platform's Electron
+binary).
+
 ## 2026-09-08 — Rekordbox reader: from validated prototype to real, tested code
 
 Ported the Python validation prototype (previous entry) into
