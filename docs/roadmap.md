@@ -85,15 +85,21 @@ Deliverables:
   track resolves to a real placeholder file, so `unresolvedCount` coming
   back `0` is a genuine end-to-end proof, not just structural. All
   passing; full `core` suite is 34 tests, green.
-- **Not yet done**: property-based/generative testing (random canonical
-  trees, not just hand-picked fixtures) is still worth the setup cost
-  here specifically, because this is a binary format — the bugs that
-  matter are the ones you didn't think to write a fixture for.
-- **Not yet done, and the actual trust gate**: one manual checkpoint that
-  can't be automated — write to a **scratch** flash drive (never
-  `E:\_Serato_`), open the result in real Serato, confirm by eye that it
-  matches. Nothing in Phase 3 or 4 should be trusted against this writer
-  until that checkpoint has happened at least once.
+- **Done**: property-based round-trip testing (`fast-check`,
+  `__tests__/crateDatabaseWriter.property.test.ts`) — many random
+  two-level tree shapes, not just hand-picked fixtures, all round-tripping
+  correctly. It earned its setup cost immediately: it surfaced a real
+  round-trip limitation (a fully-empty subtree writes no file and so
+  doesn't survive a round trip — not a bug, but a real property of the
+  format worth knowing before Phase 3's incremental-diff logic gets
+  built), now documented directly in `crateDatabaseWriter.ts`.
+- **Still open, and the actual trust gate — blocked on hardware, not on
+  more building**: one manual checkpoint that can't be automated — write
+  to a **scratch** flash drive (never `E:\_Serato_`), open the result in
+  real Serato, confirm by eye that it matches. James doesn't have a spare
+  USB on hand right now; this is deferred, not skipped. Nothing in Phase
+  3 or 4 should be trusted against this writer until that checkpoint has
+  happened at least once.
 
 ## Phase 3 — Burn to flash
 

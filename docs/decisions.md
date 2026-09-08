@@ -2,6 +2,43 @@
 
 Lightweight ADR-style log of the choices behind this project. Newest first.
 
+## 2026-09-08 — Property-based round-trip testing for the crate writer (Phase 2, software side closed)
+
+Added `packages/core/__tests__/crateDatabaseWriter.property.test.ts`
+using `fast-check`: instead of hand-picked fixtures, it generates many
+random two-level tree shapes (varying branching, track counts per node,
+and a track shared across a random number of crates) and asserts the
+same round-trip property holds for every one -- write, read back with
+the trusted reader, identical shape. 40 + 25 random cases per run, all
+passing.
+
+**It found something real on the very first run** (not a bug, a
+specification gap in how I'd been thinking about this): a node with no
+tracks anywhere in its own subtree -- not just directly on it, but on
+every descendant too -- writes no `.crate` file at all, and so doesn't
+come back on read-back. This is different from the "empty intermediate
+folder" case the hand-picked suite already covered (an empty folder with
+a non-empty *child*, which still gets synthesized because the child's
+crate file implies it exists). A *fully* empty subtree leaves nothing
+anywhere that could imply it exists. This isn't fixable -- Serato's
+format has no file that represents a wholly empty folder, since the
+folder concept is 100% inferred from `%%`-prefixes of files that
+actually exist -- so it's now documented directly in
+`crateDatabaseWriter.ts`'s module doc as a real round-trip limitation,
+with a flag for Phase 3: whatever ends up computing an incremental
+"what's new since the last burn" diff needs to know that fully-empty
+branches silently disappear, or it'll misread that as data loss.
+
+This closes the software side of Phase 2 exactly as scoped in
+`docs/roadmap.md`: writer + hand-picked round-trip suite + property-based
+round-trip suite are all done. **The one thing still open is the manual
+checkpoint** -- write to a real scratch flash drive, open in actual
+Serato, confirm by eye -- and it's genuinely blocked on hardware right
+now (James doesn't have a spare USB on hand). Explicitly not treating
+that as a reason to stop other work: it's deferred, not abandoned, and
+nothing downstream (Phase 3, "burn to flash") gets built as if the
+writer were hardware-validated until that checkpoint actually happens.
+
 ## 2026-09-08 — Crate writer, round-trip proven (Phase 2 core deliverable)
 
 Built the inverse of the crate reader: `packages/core/src/serato/

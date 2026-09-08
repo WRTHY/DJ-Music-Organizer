@@ -25,6 +25,17 @@ import { CanonicalNode, CanonicalTree, TrackRef, walkTree } from '../types';
  * direct tracks doesn't get its own file -- Serato's crate tree UI infers
  * folder structure purely from filename prefixes, so an empty
  * intermediate "folder" needs no file to exist.
+ *
+ * A related, sharper limitation that property-based testing surfaced
+ * (see __tests__/crateDatabaseWriter.property.test.ts): a node with no
+ * tracks anywhere in its own subtree -- not just directly on it, but on
+ * every descendant too -- writes NO file at all, and so does not survive
+ * a round trip through this format. This is not a bug to fix; there is
+ * no file that could represent a wholly empty folder, since the folder
+ * concept itself is 100% inferred from "%%"-prefixes of files that
+ * actually exist. A caller relying on a canonical tree's exact shape
+ * surviving a burn (e.g. for a diff-based incremental re-burn, Phase 3)
+ * needs to account for this: fully-empty branches just disappear.
  */
 
 const CRATE_VERSION_PAYLOAD = '1.0/Serato ScratchLive Crate';
