@@ -65,26 +65,35 @@ Testing:
   execute actually does, exactly; re-running execute against an
   already-organized target must not duplicate files.
 
-## Phase 2 — Crate writer, proven in isolation
+## Phase 2 — Crate writer, proven in isolation (core deliverable done; trust gate still open)
 
 **Goal**: build the write half of the Serato format — the highest-risk
 piece of engineering in this whole project — and don't let it near
 anything real until it's been proven wrong a lot of times in a sandbox.
 
 Deliverables:
-- `packages/core/src/serato/crateDatabaseWriter.ts`, the mirror of the
-  already-validated reader.
-- A round-trip test suite: canonical tree → write → read back with the
-  trusted reader → deep-equal diff. Covers nested crates, the `%%`
-  hierarchy, unicode names, empty crates, one track in several crates.
-  Property-based/generative testing (random canonical trees, not just
-  hand-picked fixtures) is worth the setup cost here specifically, because
-  this is a binary format — the bugs that matter are the ones you didn't
-  think to write a fixture for.
-- One manual checkpoint that can't be automated: write to a **scratch**
-  flash drive (never `E:\_Serato_`), open the result in real Serato,
-  confirm by eye that it matches. This is the actual trust gate for
-  everything after this phase.
+- **Done**: `packages/core/src/serato/crateDatabaseWriter.ts`, the mirror
+  of the already-validated reader — same chunk format, same encoding,
+  same path convention. One `.crate` file per canonical-tree node that
+  has direct tracks; guards against a folder name containing `%%`, a
+  track outside the given volume root, and root-level tracks (returned as
+  `skippedRootTracks` rather than silently dropped).
+- **Done**: a round-trip test suite (`__tests__/crateDatabaseWriter.test.ts`,
+  4 tests): canonical tree → write → read back with the trusted reader →
+  deep-equal diff. Covers nested crates, the `%%` hierarchy, unicode
+  names, an empty intermediate folder, one track in two crates — every
+  track resolves to a real placeholder file, so `unresolvedCount` coming
+  back `0` is a genuine end-to-end proof, not just structural. All
+  passing; full `core` suite is 34 tests, green.
+- **Not yet done**: property-based/generative testing (random canonical
+  trees, not just hand-picked fixtures) is still worth the setup cost
+  here specifically, because this is a binary format — the bugs that
+  matter are the ones you didn't think to write a fixture for.
+- **Not yet done, and the actual trust gate**: one manual checkpoint that
+  can't be automated — write to a **scratch** flash drive (never
+  `E:\_Serato_`), open the result in real Serato, confirm by eye that it
+  matches. Nothing in Phase 3 or 4 should be trusted against this writer
+  until that checkpoint has happened at least once.
 
 ## Phase 3 — Burn to flash
 

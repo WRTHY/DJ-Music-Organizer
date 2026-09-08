@@ -2,6 +2,57 @@
 
 Lightweight ADR-style log of the choices behind this project. Newest first.
 
+## 2026-09-08 — Crate writer, round-trip proven (Phase 2 core deliverable)
+
+Built the inverse of the crate reader: `packages/core/src/serato/
+crateDatabaseWriter.ts`, `writeCrateDatabase(tree, subcratesDir,
+{ volumeRoot })`. Mirrors the reader's byte format exactly -- same `vrsn`
+header, same `otrk`/`ptrk` chunk nesting, same UTF-16BE encoding, same
+"relative, forward-slash, no drive letter, resolved against the parent of
+`_Serato_`" path convention -- since the two only mean anything as a
+matched pair.
+
+**Design choice: one node with direct tracks = one crate file.** Matches
+the reader's already-established "one crate = one folder" model (see the
+2026-09-01 entry) exactly -- a `CanonicalNode` with only children and no
+tracks of its own (a purely organizational "folder") gets no `.crate`
+file, since Serato's crate-tree UI infers that structure from filename
+`%%`-prefixes alone and doesn't need a file at every level to exist.
+
+**Three guards, because a silent failure here is the actual risk this
+phase exists to manage:**
+- A folder name containing `%%` is rejected outright -- writing it would
+  silently corrupt the hierarchy the moment it's read back, since that's
+  the reader's own hierarchy separator.
+- A track whose source path isn't under the given `volumeRoot` is
+  rejected outright, rather than writing a relative path that resolves to
+  nothing (or worse, something else) on read-back.
+- Tracks living directly on the tree's root (no folder at all) are
+  returned as `skippedRootTracks` rather than silently dropped -- Serato's
+  Subcrates model has no "uncrated" bucket, so there's no correct file to
+  write them into, and the caller needs to know rather than lose tracks
+  quietly.
+
+**Round-trip test suite** (`__tests__/crateDatabaseWriter.test.ts`, 4
+tests): write a hand-built canonical tree, read it back with the already-
+trusted reader, and deep-equal the shapes. Covers nested crates, unicode
+in both folder and file names, an empty intermediate folder (proving it
+correctly gets no file), and the same physical track referenced from two
+different crates. Every track points at a real placeholder file, so the
+read-back pass also proves `unresolvedCount` comes back `0` -- a genuine
+end-to-end round trip, not just a structural one. All passing; full
+`core` suite is now 34 tests, green; `dist/` rebuilt.
+
+**What Phase 2 still needs before it's actually trusted, per
+`docs/roadmap.md`:** property-based/generative round-trip testing (random
+trees, not just hand-picked fixtures -- flagged in the roadmap as worth
+the setup cost specifically because this is a binary format), and the one
+manual checkpoint that can't be automated at all -- write to a real
+scratch flash drive and open the result in actual Serato to confirm by
+eye. Not wired into desktop IPC/UI yet either; this is core-only, same
+"logic lands before the UI catches up" pattern as everything else in this
+codebase.
+
 ## 2026-09-08 — One `npm run verify` for everything
 
 James's call: checking build/typecheck/tests/e2e as separate manual steps
