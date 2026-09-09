@@ -146,13 +146,21 @@ Deliverables, in build order:
    `ExecuteOptions.allowOverwrite` flag (default off, so the plain ad hoc
    copy flow is unchanged) that diff-driven execution passes explicitly.
    See `docs/decisions.md` for the full write-up.
-3. **Not started** — burn-to-flash orchestration: diff → plan (copy only
-   what changed, with `allowOverwrite: true`) → execute → `writeCrateDatabase`
-   (Phase 2) to (re)generate the crate structure at the target → a
-   verification pass that reads the result back with the real reader and
-   diffs it against source before calling the burn done. This is also
-   where Phase 2's still-open manual hardware checkpoint finally gets
-   exercised for real.
+3. **Done** — `packages/core/src/serato/burnToFlash.ts`: diff → plan
+   (copy only what changed, `allowOverwrite: true`) → execute →
+   `writeCrateDatabase` (Phase 2) to regenerate the *entire* crate
+   structure at the target → a verification pass that reads the result
+   back with the real reader and compares track ids against what was
+   expected (`ok`/`unresolvedCount`/`missingTrackIds`/`unexpectedTrackIds`).
+   Along the way, found and closed a real bug-in-waiting: crate
+   generation needs every track's *destination* path, not just the ones
+   copied this run, or an `unchanged` track would silently disappear from
+   the regenerated crates despite its audio file being untouched and
+   fine on disk — fixed via `treeAtDestination` in `organizer/diff.ts`,
+   built from the full diff. 6 tests, including that exact
+   add-one-track-without-losing-the-others case. See `docs/decisions.md`.
+   Still gated on Phase 2's still-open manual hardware checkpoint before
+   this is trusted against a real target.
 4. **Not started** — UI flow: pick a target drive → preview (counts of
    new / unchanged / changed — no "will delete" warning needed, since
    this is additive-only) → burn → verification result shown.
@@ -169,14 +177,18 @@ Testing:
   integration test proving a second diff+execute pass copies nothing;
   a third-pass test proving only a genuinely-changed track gets
   re-copied (and overwritten in place, not renamed aside).
+- **Done**: burn-orchestrator unit tests (first burn from empty, a
+  second burn with no source changes proving the crate database still
+  references every track, adding a track between burns, a changed track
+  overwritten in place rather than renamed aside, source-tree
+  immutability, nested crate hierarchies).
 - **Still open**: real hardware test — burn to an actual spare flash
   drive, and if a second physical Serato rig is available, confirm the
   drive works there too (blocked on the same missing-USB gap as Phase
   2's checkpoint).
 - **Still open**: failure injection — drive unplugged mid-burn, drive
   fills up mid-copy — must fail safely, never leave a half-written crate
-  database behind. Applies once the burn orchestrator (item 3 above)
-  exists.
+  database behind.
 
 ## Phase 4 — Opt-in live migration (highest risk, latest, explicitly gated)
 

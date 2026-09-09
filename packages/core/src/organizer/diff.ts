@@ -1,6 +1,14 @@
 import fs from 'node:fs/promises';
-import { CanonicalTree } from '../types';
+import path from 'node:path';
+import { CanonicalNode, CanonicalTree, TrackRef } from '../types';
 import { TrackIndexStore, hashWithCache } from '../trackIndex';
+// idForPath is a plain sha1-of-absolute-path helper that happens to live
+// under serato/ historically (see docs/decisions.md, "Phase 3, burn
+// orchestration") -- organizer/ pulling it in for treeAtDestination below
+// is a small, deliberate cross-module dependency, not an oversight; a
+// future cleanup could relocate it to types/ since it isn't actually
+// Serato-specific.
+import { idForPath } from '../serato/hash';
 import { OrganizeMode, OrganizePlan, OrganizePlanItem, planFromCanonicalTree } from './planner';
 
 /**
@@ -127,4 +135,57 @@ async function pathExists(p: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+
+/**
+ * Rebuilds a tree with the exact same shape as `tree`, but with every
+ * track's `sourcePath` (and derived `id`/`filename`/`ext`) replaced by
+ * where the diff says that track now lives (or will live) at the
+ * destination, rather than where it lives in the source library.
+ *
+ * This exists for exactly one reason: writing a destination-side format
+ * that encodes track paths (e.g. Serato's crate database via
+ * `writeCrateDatabase`) needs those paths to be relative to the
+ * *destination* volume, not the source library -- but only a `new`/
+ * `changed` track was actually just copied there. A track that's
+ * `unchanged` already exists at the destination from an earlier run and
+ * must still be represented at its destination path, or it would
+ * silently vanish from a regenerated crate database despite its audio
+ * file being untouched and perfectly fine on disk. Uses every item in
+ * `diff` (not just the ones `planFromDiff` would keep) specifically to
+ * avoid that.
+ */
+export function treeAtDestination(tree: CanonicalTree, diff: OrganizeDiff): CanonicalTree {
+  const targetPathByTrackId = new Map(diff.items.map((item) => [item.trackId, item.targetPath]));
+
+  function remapNode(node: CanonicalNode): CanonicalNode {
+    const tracks: TrackRef[] = node.tracks.map((track) => {
+      const targetPath = targetPathByTrackId.get(track.id);
+      if (!targetPath) {
+        throw new Error(
+          `treeAtDestination: no target path recorded for track "${track.sourcePath}" (id ${track.id}). ` +
+            'This should be impossible -- diffAgainstDestination computes a target path for every track ' +
+            'in the tree it was given, so this diff must not have been produced from this tree.'
+        );
+      }
+      return {
+        id: idForPath(targetPath),
+        sourcePath: targetPath,
+        filename: path.basename(targetPath),
+        ext: path.extname(targetPath).toLowerCase(),
+      };
+    });
+
+    return {
+      ...node,
+      tracks,
+      children: node.children.map(remapNode),
+    };
+  }
+
+  return {
+    ...tree,
+    root: remapNode(tree.root),
+  };
 }

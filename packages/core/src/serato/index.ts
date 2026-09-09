@@ -3,3 +3,4 @@ export * from './crateDatabaseReader';
 export * from './crateDatabaseWriter';
 export * from './detectSourceType';
 export * from './hash';
+export * from './burnToFlash';

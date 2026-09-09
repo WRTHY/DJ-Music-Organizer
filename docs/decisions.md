@@ -2,6 +2,73 @@
 
 Lightweight ADR-style log of the choices behind this project. Newest first.
 
+## 2026-09-09 — Phase 3's burn-to-flash orchestrator, built and verified
+
+The third of Phase 3's four deliverables: `packages/core/src/serato/burnToFlash.ts`,
+composing everything built so far into the actual feature ("plug and
+play on any Serato rig").
+
+**`burnToFlash(tree, volumeRoot, { store })`** does, in order: diff the
+source tree against `volumeRoot` → copy only `new`/`changed` tracks
+(`allowOverwrite: true`, since a `changed` item here is already a
+confirmed update, not an accidental collision — decision 18) →
+regenerate the *entire* crate database at the target from the tree →
+read the result back and verify it. Every burn rewrites every crate
+file, even ones with no changed tracks underneath — crate files are
+cheap, and doing this guarantees the crate structure can never quietly
+drift from the canonical tree (a track that moved between crates, say),
+even though audio files are only ever re-copied when they've actually
+changed.
+
+**A subtlety that would have been a real, silent data-loss bug if
+missed**: `writeCrateDatabase` needs track paths relative to the
+*destination* volume, but only a `new`/`changed` track was actually just
+copied there this run -- an `unchanged` track already sits at the
+destination from an earlier burn and was never touched. Feeding the
+crate writer only the tracks that got copied this run would have made
+every previously-burned, still-perfectly-fine track silently disappear
+from the regenerated crates on every incremental burn, while its audio
+file sat untouched on disk -- exactly the class of bug this whole
+project is structured to catch before it's allowed near anything real.
+Fixed by adding `treeAtDestination(tree, diff)` to `organizer/diff.ts`:
+it rebuilds a tree with every track's path rewritten to its destination
+location using the *full* diff (every item, not just what `planFromDiff`
+kept), so the crate writer always sees the complete picture. Proven with
+a dedicated test: burn once, add one new track, burn again -- the new
+track is added *and* the original is still present in the regenerated
+crate database, without being re-copied.
+
+**Verification** reads the just-written crate database back with the
+real reader and compares track ids as sets (not tree shape, which
+sidesteps the empty-subtree round-trip quirk from decision 15 entirely)
+against what was expected: `unresolvedCount` must be 0, nothing expected
+should be missing, nothing unexpected should appear. A single `ok`
+boolean is the one thing a caller needs to gate "did the burn actually
+work" on, rather than trusting that no exception was thrown.
+
+6 new tests in `__tests__/burnToFlash.test.ts`, covering: a first burn
+from empty, a second burn with no changes (the critical
+tracks-don't-vanish-from-crates case above), adding a track between
+burns, a changed track being overwritten in place rather than renamed
+aside, confirming the source tree itself is never mutated, and nested
+crate hierarchies. Full `core` suite is now 70 tests, all green, clean
+typecheck both packages.
+
+**Minor, deliberate architectural note**: `organizer/diff.ts` now imports
+`idForPath` from `serato/hash.ts` (needed by `treeAtDestination` to
+compute a fresh id for a remapped track). `idForPath` is a plain
+sha1-of-absolute-path helper with nothing Serato-specific about its
+implementation -- it only lives under `serato/` today for historical
+reasons. This is a small, working cross-module dependency, not a
+mistake, and a candidate for a future cleanup (relocating it to `types/`)
+rather than something worth pausing Phase 3 to fix now.
+
+**Still open for Phase 3**: the UI flow (pick a target drive → preview →
+burn → verification result), and everything gated on real hardware --
+Phase 2's still-open manual USB checkpoint, a real burn to an actual
+spare flash drive, and failure injection (drive unplugged mid-burn,
+drive fills up mid-copy).
+
 ## 2026-09-09 — Phase 3, first two deliverables built: TrackIndexStore and diff-driven copying
 
 Implements the design from the previous entry. Two pieces, plus a real
