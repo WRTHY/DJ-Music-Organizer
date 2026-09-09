@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { OrganizePlan, OrganizePlanItem } from './planner';
 
-export type OrganizeItemStatus = 'copied' | 'moved' | 'skipped-duplicate' | 'renamed' | 'error';
+export type OrganizeItemStatus = 'copied' | 'moved' | 'skipped-duplicate' | 'renamed' | 'overwritten' | 'error';
 
 export interface OrganizeItemResult {
   trackId: string;
@@ -24,6 +24,26 @@ export interface OrganizeReport {
 export interface ExecuteOptions {
   /** If true, compute what would happen without touching the filesystem. */
   dryRun?: boolean;
+  /**
+   * When a target already exists with *different* content, the default
+   * (false) never overwrites it -- it renames the new file alongside the
+   * existing one ("Track (2).mp3"), since an ordinary ad hoc copy has no
+   * way to know whether that collision is meaningful or just two
+   * unrelated tracks landing on the same name.
+   *
+   * A diff-driven plan (see organizer/diff.ts, Phase 3 of
+   * docs/roadmap.md) is different: a "changed" diff item already means
+   * "this exact track's designated slot has different content now,"
+   * established by content hash against that specific destination file,
+   * not an incidental collision. Passing `true` here tells the executor
+   * to trust that and overwrite in place instead of creating a
+   * duplicate -- otherwise every real edit to a track would pile up an
+   * ever-growing set of "(2)", "(3)"... copies at the destination every
+   * time it's re-burned or re-copied, which defeats the point of
+   * diffing. Still never touches a target whose content already matches
+   * the source (that stays `skipped-duplicate` either way).
+   */
+  allowOverwrite?: boolean;
 }
 
 /**
@@ -33,17 +53,21 @@ export interface ExecuteOptions {
  *   (compared by sha1), the item is skipped as an already-organized
  *   duplicate;
  * - if a file already exists with *different* content, the target is
- *   renamed ("Track (2).mp3") rather than clobbering it.
+ *   renamed ("Track (2).mp3") rather than clobbering it -- unless
+ *   `options.allowOverwrite` is set, in which case it's overwritten in
+ *   place (see ExecuteOptions.allowOverwrite for why a diff-driven plan
+ *   wants that instead).
  */
 export async function executePlan(
   plan: OrganizePlan,
   options: ExecuteOptions = {}
 ): Promise<OrganizeReport> {
   const dryRun = !!options.dryRun;
+  const allowOverwrite = !!options.allowOverwrite;
   const results: OrganizeItemResult[] = [];
 
   for (const item of plan.items) {
-    results.push(await executeItem(item, dryRun));
+    results.push(await executeItem(item, dryRun, allowOverwrite));
   }
 
   const summary = results.reduce<Record<OrganizeItemStatus, number>>(
@@ -51,7 +75,7 @@ export async function executePlan(
       acc[r.status] = (acc[r.status] ?? 0) + 1;
       return acc;
     },
-    { copied: 0, moved: 0, 'skipped-duplicate': 0, renamed: 0, error: 0 }
+    { copied: 0, moved: 0, 'skipped-duplicate': 0, renamed: 0, overwritten: 0, error: 0 }
   );
 
   return {
@@ -62,12 +86,12 @@ export async function executePlan(
   };
 }
 
-async function executeItem(item: OrganizePlanItem, dryRun: boolean): Promise<OrganizeItemResult> {
+async function executeItem(item: OrganizePlanItem, dryRun: boolean, allowOverwrite: boolean): Promise<OrganizeItemResult> {
   try {
     const targetDir = path.dirname(item.targetPath);
     if (!dryRun) await fs.mkdir(targetDir, { recursive: true });
 
-    const collision = await resolveCollision(item.targetPath, item.sourcePath);
+    const collision = await resolveCollision(item.targetPath, item.sourcePath, allowOverwrite);
     if (collision.status === 'skipped-duplicate') {
       return {
         trackId: item.trackId,
@@ -79,7 +103,13 @@ async function executeItem(item: OrganizePlanItem, dryRun: boolean): Promise<Org
 
     const finalTargetPath = collision.targetPath;
     const status: OrganizeItemStatus =
-      collision.status === 'renamed' ? 'renamed' : item.mode === 'move' ? 'moved' : 'copied';
+      collision.status === 'renamed'
+        ? 'renamed'
+        : collision.status === 'overwritten'
+          ? 'overwritten'
+          : item.mode === 'move'
+            ? 'moved'
+            : 'copied';
 
     if (!dryRun) {
       if (item.mode === 'copy') {
@@ -124,15 +154,20 @@ async function moveFile(source: string, target: string): Promise<void> {
 type CollisionResolution =
   | { status: 'clear'; targetPath: string }
   | { status: 'renamed'; targetPath: string }
+  | { status: 'overwritten'; targetPath: string }
   | { status: 'skipped-duplicate'; targetPath: string };
 
-async function resolveCollision(targetPath: string, sourcePath: string): Promise<CollisionResolution> {
+async function resolveCollision(targetPath: string, sourcePath: string, allowOverwrite: boolean): Promise<CollisionResolution> {
   const alreadyExists = await pathExists(targetPath);
   if (!alreadyExists) return { status: 'clear', targetPath };
 
   const [sourceHash, targetHash] = await Promise.all([hashFile(sourcePath), hashFile(targetPath)]);
   if (sourceHash === targetHash) {
     return { status: 'skipped-duplicate', targetPath };
+  }
+
+  if (allowOverwrite) {
+    return { status: 'overwritten', targetPath };
   }
 
   const renamed = await findAvailableName(targetPath);

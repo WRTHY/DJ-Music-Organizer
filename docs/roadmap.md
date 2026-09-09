@@ -105,34 +105,78 @@ Deliverables:
 
 **Goal**: the feature that actually delivers "plug and play on any Serato
 rig" — take the canonical library and write a fresh, complete `_Serato_`
-structure onto a target drive.
+structure onto a target drive, without re-copying everything that's
+already there.
 
-Deliverables:
-- Track-identity strategy implemented — content hash, since it's the only
-  option that survives a rename or move without either losing track of a
-  file or duplicating it.
-- Incremental burn: diff the canonical tree against what's already on the
-  target drive, copy only what's new or changed, rewrite only the crates
-  that changed — so re-burning a 5-year library isn't a full re-copy every
-  time.
-- **Generalizes beyond burn-to-flash** (James, 2026-09-08): the same
-  diff-against-the-destination idea applies to the ordinary copy-to-
-  canonical-tree step too, not just burning to a flash drive — compare
-  what's already at the target against what the scan found, and only
-  actually copy what's new or changed there as well. Same content-hash
-  identity work covers both; this is the reason track-identity moved up
-  to a Phase 3 prerequisite rather than staying deferred.
-- UI flow: pick a target drive → preview (what's new, what's unchanged) →
-  burn → automatic verification pass (read back what was written, diff
-  against source) before calling it done.
+**Design decided (2026-09-09, see `docs/decisions.md`)**: content-hash
+identity is added as a new, separate concept looked up on demand — not a
+field the existing readers populate on every scan, since that would make
+ordinary scanning slower for no benefit outside this phase. A computed
+hash is cached in a small JSON-backed index (path → size/mtime/hash),
+trusted only while size and mtime still match, so re-scanning the library
+doesn't mean re-hashing every file every time. Diffing against a
+destination is additive-only: a file at the destination with no matching
+source track is left alone, never deleted — consistent with this
+project's "prove it before it's allowed to be destructive" posture.
+Deleting orphaned files is explicitly out of scope for this phase.
+
+Deliverables, in build order:
+1. **Done** — `packages/core/src/trackIndex/`: `TrackIndexStore`
+   interface (`get`/`set`/`all`/`load`/`save`) plus a `JsonTrackIndexStore`
+   implementation, and `hashWithCache(store, absolutePath)` (stat → reuse
+   cached hash if size+mtime match, else recompute and update the
+   cache). `core` code depends only on the interface, so a different
+   storage backend can slot in later without touching planner/executor.
+   11 tests.
+2. **Done** — `packages/core/src/organizer/diff.ts`: `diffAgainstDestination`
+   compares the canonical source tree against what `readFolderTree` finds
+   already at a destination (a burn target, or the ordinary
+   copy-to-canonical-tree target — the same logic covers both, per the
+   note below), classifying each source track `new` / `unchanged` /
+   `changed` by content hash; `planFromDiff` turns that into a plan with
+   only `new`/`changed` items; `summarizeDiff` gives preview counts. 7
+   tests, including a real end-to-end proof that burning/copying twice
+   in a row to the same destination copies nothing the second time.
+   **Along the way, found and fixed a real gap in `executor.ts`**: on a
+   genuine content mismatch it always renamed the new file aside
+   ("track1 (2).mp3") rather than updating in place — correct for an
+   accidental collision between unrelated tracks, but wrong for a
+   diff-confirmed update, where it would otherwise pile up an
+   ever-growing set of duplicates every re-burn. Fixed with a new
+   `ExecuteOptions.allowOverwrite` flag (default off, so the plain ad hoc
+   copy flow is unchanged) that diff-driven execution passes explicitly.
+   See `docs/decisions.md` for the full write-up.
+3. **Not started** — burn-to-flash orchestration: diff → plan (copy only
+   what changed, with `allowOverwrite: true`) → execute → `writeCrateDatabase`
+   (Phase 2) to (re)generate the crate structure at the target → a
+   verification pass that reads the result back with the real reader and
+   diffs it against source before calling the burn done. This is also
+   where Phase 2's still-open manual hardware checkpoint finally gets
+   exercised for real.
+4. **Not started** — UI flow: pick a target drive → preview (counts of
+   new / unchanged / changed — no "will delete" warning needed, since
+   this is additive-only) → burn → verification result shown.
+
+**Generalizes beyond burn-to-flash** (James, 2026-09-08): the diff step
+above already applies equally to the ordinary copy-to-canonical-tree
+step, not just a flash-drive target — the same `diffAgainstDestination`/
+`planFromDiff` pair works for either destination.
 
 Testing:
-- Round-trip *and* incremental-diff tests (burning twice in a row should
-  copy nothing the second time).
-- Real hardware test: burn to an actual spare flash drive, and if a second
-  physical Serato rig is available, confirm the drive works there too.
-- Failure injection: drive unplugged mid-burn, drive fills up mid-copy —
-  must fail safely, never leave a half-written crate database behind.
+- **Done**: index-store unit tests (cache hit/miss, atomic-save,
+  corrupted-file recovery); diff-classification unit tests against real
+  files (new/unchanged/changed, mixed across nested folders);
+  integration test proving a second diff+execute pass copies nothing;
+  a third-pass test proving only a genuinely-changed track gets
+  re-copied (and overwritten in place, not renamed aside).
+- **Still open**: real hardware test — burn to an actual spare flash
+  drive, and if a second physical Serato rig is available, confirm the
+  drive works there too (blocked on the same missing-USB gap as Phase
+  2's checkpoint).
+- **Still open**: failure injection — drive unplugged mid-burn, drive
+  fills up mid-copy — must fail safely, never leave a half-written crate
+  database behind. Applies once the burn orchestrator (item 3 above)
+  exists.
 
 ## Phase 4 — Opt-in live migration (highest risk, latest, explicitly gated)
 

@@ -2,6 +2,145 @@
 
 Lightweight ADR-style log of the choices behind this project. Newest first.
 
+## 2026-09-09 — Phase 3, first two deliverables built: TrackIndexStore and diff-driven copying
+
+Implements the design from the previous entry. Two pieces, plus a real
+bug the diff work surfaced in already-shipped code.
+
+**1. `packages/core/src/trackIndex/trackIndexStore.ts`**: `TrackIndexStore`
+interface (`get`/`set`/`all`/`load`/`save`) and a `JsonTrackIndexStore`
+implementation -- an atomically-written JSON file (temp file + rename)
+mapping absolute path to `{ size, mtimeMs, contentHash, hashedAt }`. A
+corrupted index file starts fresh rather than throwing, since it only
+ever caches something recomputable -- never a source of real data.
+`hashWithCache(store, absolutePath)` does the actual caching: stat first,
+trust the cached hash only if size+mtime still match, otherwise re-hash
+and update the cache. Deliberately takes a plain path rather than a
+`TrackRef`, since the diff step below needs to hash files on the
+destination side too, and those aren't tracks. 11 tests.
+
+**2. `packages/core/src/organizer/diff.ts`**: `diffAgainstDestination(tree,
+targetRoot, store)` reuses `planFromCanonicalTree` for every track's
+expected target path (so the path-traversal safety check from decision
+16 automatically covers this too), then classifies each as `new` /
+`unchanged` / `changed` by comparing cached content hashes. No
+`orphaned`/`deleted` status exists -- diffing is additive-only by design
+(previous entry). `planFromDiff(diff)` turns that into a plan containing
+only `new`/`changed` items; `summarizeDiff(diff)` gives the counts a UI
+preview needs. 7 tests, including the actual end-to-end point of this
+whole phase: **burning/copying twice in a row to the same destination
+copies nothing the second time**, proven by running the real
+diff -> plan -> execute pipeline twice against real files, not just
+asserting on diff output in isolation.
+
+**3. A real bug the end-to-end test surfaced in `executor.ts`, fixed on
+the spot**: when a `changed` track's target path already had different
+content, `executePlan` did exactly what it does for *any* content
+mismatch -- renamed the new file alongside the old one
+("track1 (2).mp3") rather than touching the existing file. That's the
+right call for an accidental collision between two unrelated tracks
+(the case the original design was solving for), but wrong for a
+diff-confirmed update: the diff already established, by content hash
+against that exact destination file, that this is the same track's slot
+with different content now, not an unrelated collision. Left as-is, every
+real edit to a track would pile up an ever-growing set of "(2)", "(3)"...
+duplicates every time the library gets re-copied or re-burned --
+defeating the entire point of diffing. **Fix**: `ExecuteOptions` gained
+`allowOverwrite` (default `false`, so the ordinary ad hoc copy flow keeps
+today's safe rename-aside behavior unchanged); when `true`, a genuine
+content mismatch is overwritten in place instead of renamed, reported
+under a new `overwritten` status. A target whose content already matches
+the source is still always skipped either way -- `allowOverwrite` only
+changes what happens on a *real* mismatch. Diff-driven execution (Phase
+3's burn/re-copy orchestration, not yet built) is the intended caller;
+covered by 2 new tests in `organizer.test.ts` plus the diff suite's
+overwrite-in-place assertion. Full `core` suite is now 64 tests, all
+green, clean typecheck both packages.
+
+**Next**: the burn-to-flash orchestrator itself (diff -> plan ->
+execute -> `writeCrateDatabase` -> read-back verification), still gated
+on Phase 2's manual hardware checkpoint before it's trusted against a
+real target. See `docs/roadmap.md`'s Phase 3 section.
+
+## 2026-09-09 — Phase 3 design: content-hash identity, an index cache, and additive-only diffing
+
+Planning pass for Phase 3 ("burn to flash"), before any code gets written.
+Three design questions, decided together since they're one connected
+piece of plumbing:
+
+**1. Where does content-hash identity live?** `TrackRef.id` stays exactly
+as it is today (a hash of the current path, used everywhere — planner,
+executor, tests, the IPC contract) — changing what `id` *means* would
+touch every one of those call sites for no real benefit. Content hash is
+added as a new, separate concept instead, and — deliberately — it's
+**not** a field the existing readers (`folderTreeReader`,
+`crateDatabaseReader`, `pdbReader`) populate eagerly on every scan. A
+plain scan today does zero file-content reads; forcing every scan to hash
+every track's bytes just to fill in a field nobody asked for would make
+ordinary scanning measurably slower for no benefit outside of Phase 3.
+Instead, content hash is computed lazily, only by the diffing/burning
+code path that actually needs it, and looked up by track rather than
+carried on `TrackRef` itself.
+
+**2. How is a computed hash remembered across runs, so re-scanning 5
+years of music doesn't re-hash every file every time?** A new
+`TrackIndexStore` interface (`get`/`set`/`all`/`load`/`save`) is the only
+thing `core` code depends on — never a concrete storage format directly.
+The first (and for now, only) implementation backing it is a plain JSON
+file (`{ [absolutePath]: { size, mtimeMs, contentHash, hashedAt } }`),
+written atomically (temp file + rename, so a crash mid-save can't corrupt
+it). A cached hash is only trusted if the file's current `size` *and*
+`mtime` still match what's recorded; if either changed, it's re-hashed —
+the same cheap-stat-before-expensive-read trick git and rsync use.
+
+Explicitly *not* SQLite, for now: at personal-library scale (tens of
+thousands of tracks, not millions) a JSON index is fast enough that a
+relational store would be solving a problem this project doesn't have,
+and `better-sqlite3` is a native Node module — a genuinely new category
+of Electron packaging/build risk for a project with zero native deps
+today. The `TrackIndexStore` seam exists specifically so this can change
+later without touching planner/executor code: if Phase 6 (duplicate
+detection, a real library browser) ever needs actual relational queries
+at real scale, a SQLite-backed implementation slots in behind the same
+interface then — not before there's a real reason.
+
+**3. What does diffing do when a track disappears from the source?**
+Additive-only, never delete — matches the project's whole safety posture
+so far (copy first, nothing destructive until proven). A file at a burn
+destination that no longer has a matching source track is just left
+alone; worst case is wasted disk space, never data loss. An explicit,
+separately-designed "clean up orphans" step (previewed, confirmed) can be
+added later once the diffing itself has been trusted for a while — it is
+*not* part of Phase 3's initial scope.
+
+### Concrete shape this gives Phase 3
+
+- `packages/core/src/trackIndex/` — `TrackIndexEntry`, `TrackIndexStore`,
+  `JsonTrackIndexStore`, and `hashWithCache(store, track)` (stat → compare
+  against cache → reuse or recompute → update cache).
+- A diff step — compares the canonical source tree against what
+  `readFolderTree` finds already sitting at a destination (burn target,
+  or the ordinary copy-to-canonical-tree target — this generalizes to
+  both, per the 2026-09-08 roadmap note below), classifying every source
+  track as `new`, `unchanged`, or `changed`, using cached content hashes
+  on both sides. Only `new`/`changed` items become plan items — this is
+  the actual payoff: re-burning (or re-copying to an already-organized
+  target) copies nothing that hasn't actually changed.
+- A burn-to-flash orchestrator that composes diff → plan → execute copies
+  → `writeCrateDatabase` (already built, Phase 2) → a verification pass
+  (read the result back with the real reader, diff against source). This
+  is also where Phase 2's still-open manual hardware checkpoint finally
+  gets exercised for real, since burning is the first place the writer
+  gets used for something real rather than a round-trip test.
+
+Testing this needs, once built: index-store cache-hit/cache-miss
+round-trip tests; diff classification against hand-built trees (new/
+unchanged/changed, plus the already-known empty-subtree quirk from
+decision 15); an integration test proving a second burn against the same
+destination copies nothing; then the real-hardware and failure-injection
+testing already scoped in `docs/roadmap.md`'s Phase 3 section.
+
+
 ## 2026-09-08 — Path-traversal audit: a real, currently-shipped vulnerability found and closed
 
 James asked for one last edge-case pass specifically for things that
