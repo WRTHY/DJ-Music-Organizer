@@ -2,6 +2,59 @@
 
 Lightweight ADR-style log of the choices behind this project. Newest first.
 
+## 2026-09-08 — Path-traversal audit: a real, currently-shipped vulnerability found and closed
+
+James asked for one last edge-case pass specifically for things that
+could corrupt files or paths, before moving on. It found something real,
+and it wasn't in the new crate writer -- it was in `planner.ts`, code
+that's been shipping since Phase 0.
+
+**The actual attack**: `readCrateDatabase` builds a tree's folder
+structure by splitting a `.crate` FILENAME on `%%`
+(`segmentsFromCrateFilename`), with no validation of what falls out the
+other side. A file literally named `..%%Evil.crate` parses into segments
+`["..", "Evil"]`. `planFromCanonicalTree` then built target paths with
+plain `path.join(targetRoot, ...segments, filename)` and never checked
+the result stayed under `targetRoot` -- so that one file would silently
+plan a copy to a path *outside* the folder James chose as his target
+root. `readFolderTree` can't produce this (folder names come straight
+from `fs.readdir`, which never returns `..` or a separator as an entry
+name), but `readCrateDatabase` treats a filename as untrusted text, and
+nothing downstream was checking it. A corrupted, renamed, or hostile
+`.crate` file dropped into `Subcrates` was a real path to writing
+somewhere the user never asked for.
+
+**Fix**: `planFromCanonicalTree` now computes each target path and
+verifies it's still inside the resolved target root (`path.relative`
+doesn't start with `..` and isn't absolute) before adding it to the
+plan, and throws a clear, descriptive error otherwise. This is the
+single defense point regardless of *what* produced the bad segment --
+today's `%%`-filename parsing, a hand-built tree, or whatever builds
+trees next (a Rekordbox importer, say). Proven end-to-end in
+`__tests__/planner.test.ts`, including writing a real `..%%Evil.crate`
+file, reading it with the actual reader, and confirming the plan step
+refuses it rather than producing an escaping path.
+
+**Two related hardening passes on `crateDatabaseWriter.ts` while the
+same class of bug was fresh**:
+- The existing `%%`-in-a-name guard was extended to also reject a
+  segment containing a path separator (`/` or `\`) or being exactly `.`
+  or `..` -- the writer's own mirror of the same risk, since it also
+  builds a filesystem path (the `.crate` file's own location) by joining
+  segments together, plus a general `assertStaysUnderRoot` check on the
+  final path as a catch-all.
+- Added a defense-in-depth check against two different tree nodes
+  colliding on the same `.crate` filename (which would silently
+  overwrite one with the other) -- can't happen from either existing
+  reader today (both prevent duplicate sibling names structurally), but
+  the writer shouldn't rely on that being true forever, especially once
+  more tree-producing code exists.
+
+All new behavior is covered by tests, not just described: 5 new tests in
+`planner.test.ts`, 3 new tests in `crateDatabaseWriter.test.ts`. Full
+`core` suite is now 44 tests, all green; clean typecheck on both
+packages.
+
 ## 2026-09-08 — Property-based round-trip testing for the crate writer (Phase 2, software side closed)
 
 Added `packages/core/__tests__/crateDatabaseWriter.property.test.ts`

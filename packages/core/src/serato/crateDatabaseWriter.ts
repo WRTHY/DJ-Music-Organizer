@@ -94,11 +94,23 @@ export async function writeCrateDatabase(
   });
 
   const filesWritten: string[] = [];
+  const claimedFilenames = new Set<string>();
   for (const node of nodesToWrite) {
     const filename = crateFilenameForPath(node.path);
+    if (claimedFilenames.has(filename)) {
+      throw new Error(
+        `Two different folders in this tree both map to the crate file "${filename}" -- writing ` +
+          'both would silently overwrite the first with the second, losing its tracks. This ' +
+          'usually means two sibling folders share the same name somewhere in the tree, which ' +
+          'should never happen in a well-formed canonical tree.'
+      );
+    }
+    claimedFilenames.add(filename);
+
     const relativePaths = node.tracks.map((track) => toRelativePath(track.sourcePath, resolvedVolumeRoot));
     const buffer = buildCrateBuffer(relativePaths);
     const filePath = path.join(subcratesDir, filename);
+    assertStaysUnderRoot(filePath, subcratesDir, filename);
     await fs.writeFile(filePath, buffer);
     filesWritten.push(filePath);
   }
@@ -124,8 +136,42 @@ function crateFilenameForPath(segments: string[]): string {
           'read-back. Rename the folder before burning to flash.'
       );
     }
+    if (segment.includes('/') || segment.includes('\\')) {
+      throw new Error(
+        `Folder name "${segment}" contains a path separator ("/" or "\\") -- writing it would ` +
+          'change WHERE this file lands on disk instead of just naming a crate, since the ' +
+          'filename is built by joining path segments together. Rename the folder before ' +
+          'burning to flash.'
+      );
+    }
+    if (segment === '.' || segment === '..') {
+      throw new Error(
+        `Folder name "${segment}" is a path-traversal segment, not a real folder name -- writing ` +
+          'it could place the crate file outside the Subcrates folder entirely. Rename the ' +
+          'folder before burning to flash.'
+      );
+    }
   }
   return `${segments.join('%%')}.crate`;
+}
+
+/**
+ * The same "never write outside the folder we were told to write into"
+ * boundary as toRelativePath below, applied to the .crate file's own
+ * destination rather than the track path inside it. crateFilenameForPath
+ * already rejects the known ways a segment could cause this
+ * (separators, ".."), but this is the actual safety net -- it catches
+ * any escape regardless of what caused it, the same way
+ * planner.ts's assertStaysUnderRoot protects the copy/move path.
+ */
+function assertStaysUnderRoot(filePath: string, subcratesDir: string, filename: string): void {
+  const relative = path.relative(subcratesDir, filePath);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error(
+      `Refusing to write "${filePath}" -- it falls outside the Subcrates folder "${subcratesDir}" ` +
+        `(computed from filename "${filename}").`
+    );
+  }
 }
 
 /**

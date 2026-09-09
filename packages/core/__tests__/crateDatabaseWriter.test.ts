@@ -158,4 +158,69 @@ describe('writeCrateDatabase (round-trip against the trusted reader)', () => {
 
     await expect(writeCrateDatabase(tree, subcratesDir, { volumeRoot })).rejects.toThrow(/volume root/);
   });
+
+  it('rejects a folder name containing a path separator, which would change where the file lands', async () => {
+    const t = track(path.join(volumeRoot, 'Inbox', 'track.mp3'));
+    await touch(t.sourcePath);
+
+    const forwardSlash: CanonicalTree = {
+      generatedAt: new Date().toISOString(),
+      sourceType: 'serato-crates',
+      root: node('', [], [], [node('Evil/Escape', ['Evil/Escape'], [t])]),
+    };
+    await expect(writeCrateDatabase(forwardSlash, subcratesDir, { volumeRoot })).rejects.toThrow(
+      /path separator/
+    );
+
+    const backslash: CanonicalTree = {
+      generatedAt: new Date().toISOString(),
+      sourceType: 'serato-crates',
+      root: node('', [], [], [node('Evil\\Escape', ['Evil\\Escape'], [t])]),
+    };
+    await expect(writeCrateDatabase(backslash, subcratesDir, { volumeRoot })).rejects.toThrow(
+      /path separator/
+    );
+  });
+
+  it('rejects a folder name that is a path-traversal segment ("." or "..")', async () => {
+    const t = track(path.join(volumeRoot, 'Inbox', 'track.mp3'));
+    await touch(t.sourcePath);
+
+    const tree: CanonicalTree = {
+      generatedAt: new Date().toISOString(),
+      sourceType: 'serato-crates',
+      root: node('', [], [], [
+        node('..', ['..'], [], [node('Evil', ['..', 'Evil'], [t])]),
+      ]),
+    };
+
+    await expect(writeCrateDatabase(tree, subcratesDir, { volumeRoot })).rejects.toThrow(
+      /path-traversal segment/
+    );
+  });
+
+  it('rejects two sibling folders that collide on the same crate filename, instead of silently overwriting', async () => {
+    // Two DIFFERENT nodes that both happen to produce "Foo.crate" -- the
+    // only realistic way this occurs is a malformed tree with duplicate
+    // sibling names (readFolderTree/readCrateDatabase both prevent this
+    // structurally, but writeCrateDatabase trusts whatever tree it's
+    // given, so this is a defense-in-depth check on itself).
+    const t1 = track(path.join(volumeRoot, 'Inbox', 'track1.mp3'));
+    const t2 = track(path.join(volumeRoot, 'Inbox', 'track2.mp3'));
+    await touch(t1.sourcePath);
+    await touch(t2.sourcePath);
+
+    const tree: CanonicalTree = {
+      generatedAt: new Date().toISOString(),
+      sourceType: 'serato-crates',
+      root: node('', [], [], [
+        node('Foo', ['Foo'], [t1]),
+        node('Foo', ['Foo'], [t2]), // duplicate sibling name -> same filename
+      ]),
+    };
+
+    await expect(writeCrateDatabase(tree, subcratesDir, { volumeRoot })).rejects.toThrow(
+      /both map to the crate file/
+    );
+  });
 });
