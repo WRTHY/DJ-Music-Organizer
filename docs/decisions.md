@@ -2,6 +2,83 @@
 
 Lightweight ADR-style log of the choices behind this project. Newest first.
 
+## 2026-09-10 — Rekordbox reader extended to playlist/crate hierarchy, validated against real hardware
+
+Phase 5's "read side, playlists" slice (see docs/roadmap.md) — the natural
+next step flagged when the flat-track reader shipped (2026-09-08 entry
+below): `pdbReader.ts` read individual tracks but not how Rekordbox
+actually organizes them.
+
+**Validated against a second real export, from real CDJ/Rekordbox
+hardware this time** — James connected a flash drive that had actually
+been burned for and used on his Rekordbox setup (not just exported from
+the desktop app), at `D:\PIONEER\rekordbox\export.pdb`: 3,549 tracks, 431
+playlist/folder nodes, 4,037 track-in-playlist entries. Every decoded
+folder and playlist name came back as real, readable text in a sensible
+hierarchy — "Artists" containing named-artist subfolders, genre-style
+folders like "Chill Trap House" and "Bass - Riddim" with real tracks
+inside — not garbage, which is the same bar the original track-path
+validation was held to. The drive also confirmed the `volumeRoot`
+convention holds the same way it does for Serato: track paths are stored
+as `/<top-level-folder>/...` (here, `/Open Decks/...`, since that's the
+top-level folder name on this particular drive) relative to the parent of
+`PIONEER`, not to `PIONEER` itself.
+
+**Two new tables, same page/row mechanics as the tracks table.**
+`playlist_tree` (table type 7) rows are a real parent-pointer hierarchy —
+`parentId`/`id`/`sortOrder`/`isFolder`/`name` — unlike Serato's crates,
+which fake nesting via `%%`-separated filenames with no actual parent
+links. `playlist_entries` (table type 8) rows are just
+`entryIndex`/`trackId`/`playlistId`, no strings, 12 bytes flat. Refactored
+the page/row-walking loop that was previously inlined in
+`parsePdbTracks` into a shared `walkTableRows` helper so all three tables
+(tracks, playlist_tree, playlist_entries) go through the same address
+math — the loop itself was already proven correct, this just stopped
+duplicating it.
+
+**A real format quirk, handled deliberately, not just noted:** Rekordbox's
+own data model has no way to attach a track directly to a folder, so its
+UI fakes it by creating a hidden child playlist literally named
+`_FolderTracks` under any folder that has tracks dropped straight into
+it — confirmed on the real export, where every folder with direct tracks
+in the Rekordbox UI has exactly one. `buildCanonicalTreeFromPlaylists`
+(new: `packages/core/src/rekordbox/canonicalTree.ts`, the Rekordbox
+counterpart to `serato/crateDatabaseReader.ts`) folds a `_FolderTracks`
+child's tracks into its parent folder node and drops the node itself,
+rather than surfacing Rekordbox's internal implementation detail as a
+visible subfolder — this is a judgment call the format doesn't state
+outright, flagged here in case an export shaped differently than the one
+this was checked against ever disagrees with it. Same multi-membership
+caveat as Serato crates applies: a track in more than one playlist stays
+in every one of them, no single "owning" node is chosen.
+
+**`playlist_entries` rows carry no validity marker** (unlike track rows'
+required subtype, or playlist_tree rows' implicit validation via a
+decodable name) — so a bogus row can't be rejected at parse time. Handled
+one layer up instead: `buildCanonicalTreeFromPlaylists` drops any entry
+whose `trackId` or `playlistId` doesn't match a real row from this same
+export, and counts them (`orphanedEntryCount`) rather than trusting or
+crashing on them. 0 on the real export used to validate this.
+
+**Verified two ways before being called done, not just unit-tested:**
+alongside the usual synthetic-buffer tests (`pdbReader.test.ts`, +5) and
+plain-data join/hierarchy tests (`canonicalTree.test.ts`, new, 7 tests —
+operating on typed arrays directly rather than binary, since this
+function's job is reshaping already-parsed data, not decoding the format),
+the actual compiled reader was run against the real 3,549-track export in
+this session: 0 orphaned entries, all 4,037 entries placed in the tree, 0
+`_FolderTracks` nodes leaking through as visible subfolders, and a spot
+check (`Chill Trap House`) showing the right 44 tracks with correctly
+resolved paths. `core`'s full suite — 82 tests, up from 70 — was run in
+full (not just the new file) in a scratch checkout in this session, all
+green, clean typecheck, so this is verified beyond the usual "James runs
+it on his machine" step for once, on top of that step still happening
+normally. Not yet wired into desktop IPC/UI — core-only, same pattern the
+flat-track reader and the Serato readers before it followed.
+
+Write-side strategy (task #22) is still open and untouched by this work —
+see docs/roadmap.md's Phase 5 section.
+
 ## 2026-09-10 — Phase 3's UI flow wired up and verified (Phase 3's software side is now fully done)
 
 The fourth and last of Phase 3's deliverables: a "Burn to flash" section

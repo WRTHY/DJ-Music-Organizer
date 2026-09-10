@@ -1,4 +1,4 @@
-import { parsePdbTracks } from '../src/rekordbox/pdbReader';
+import { parsePdbPlaylistEntries, parsePdbPlaylistTree, parsePdbTracks } from '../src/rekordbox/pdbReader';
 
 const PAGE_SIZE = 4096;
 const PAGE_HEADER_SIZE = 0x28;
@@ -189,5 +189,140 @@ describe('parsePdbTracks', () => {
     buffer.writeUInt32LE(PAGE_SIZE, 0x04);
     buffer.writeUInt32LE(0, 0x08); // num_tables = 0
     expect(parsePdbTracks(buffer)).toEqual([]);
+  });
+});
+
+/**
+ * playlist_tree / playlist_entries (2026-09-10, docs/roadmap.md Phase 5's
+ * "read side, playlists" slice). Separate synthetic-buffer builders from
+ * the tracks-table ones above -- deliberately not refactored to share
+ * them, so the already-passing tracks-table tests above stay untouched.
+ * Both row layouts and the byte-for-byte real-file validation they're
+ * based on are documented in pdbReader.ts's module doc.
+ */
+
+/** Builds one data page containing arbitrary pre-encoded rows (row layout doesn't matter here -- only page/row-group mechanics do). */
+function buildGenericRowPage(pageIndex: number, rows: Buffer[]): Buffer {
+  const page = Buffer.alloc(PAGE_SIZE);
+  page.writeUInt32LE(pageIndex, 0x04);
+  page.writeUInt32LE(0, 0x0c); // next_page (0 = end of chain)
+  const rowCounts = rows.length & 0x1fff;
+  page[0x18] = rowCounts & 0xff;
+  page[0x19] = (rowCounts >> 8) & 0xff;
+  page[0x1a] = (rowCounts >> 16) & 0xff;
+  page[0x1b] = 0x00; // page_flags: not an index page
+
+  let heapCursor = PAGE_HEADER_SIZE;
+  const rowOffsets: number[] = [];
+  for (const row of rows) {
+    rowOffsets.push(heapCursor - PAGE_HEADER_SIZE);
+    row.copy(page, heapCursor);
+    heapCursor += row.length;
+  }
+
+  const groupStart = PAGE_SIZE - 36;
+  let presence = 0;
+  rowOffsets.forEach((offset, i) => {
+    page.writeUInt16LE(offset, groupStart + (15 - i) * 2);
+    presence |= 1 << i;
+  });
+  page.writeUInt16LE(presence, groupStart + 32);
+
+  return page;
+}
+
+/** Wraps a single page as a one-table export.pdb buffer, with the given table type pointed at page 1. */
+function buildSingleTablePdb(tableType: number, page: Buffer): Buffer {
+  const buffer = Buffer.alloc(PAGE_SIZE * 2); // +1 for the file header "page"
+  buffer.writeUInt32LE(PAGE_SIZE, 0x04);
+  buffer.writeUInt32LE(1, 0x08); // num_tables
+  buffer.writeUInt32LE(tableType, 0x1c); // type
+  buffer.writeUInt32LE(1, 0x1c + 8); // first_page
+  page.copy(buffer, PAGE_SIZE);
+  return buffer;
+}
+
+function buildPlaylistTreeRow(node: {
+  parentId: number;
+  sortOrder: number;
+  id: number;
+  isFolder: boolean;
+  name: string;
+  longName?: boolean;
+}): Buffer {
+  const header = Buffer.alloc(20);
+  header.writeUInt32LE(node.parentId, 0);
+  header.writeUInt32LE(0, 4); // unidentified field, constant 0 in every real row seen
+  header.writeUInt32LE(node.sortOrder, 8);
+  header.writeUInt32LE(node.id, 12);
+  header.writeUInt32LE(node.isFolder ? 1 : 0, 16);
+  const nameBuf = node.longName ? encodeLongUtf16String(node.name) : encodeShortString(node.name);
+  return Buffer.concat([header, nameBuf]);
+}
+
+function buildPlaylistEntryRow(entry: { entryIndex: number; trackId: number; playlistId: number }): Buffer {
+  const row = Buffer.alloc(12);
+  row.writeUInt32LE(entry.entryIndex, 0);
+  row.writeUInt32LE(entry.trackId, 4);
+  row.writeUInt32LE(entry.playlistId, 8);
+  return row;
+}
+
+describe('parsePdbPlaylistTree', () => {
+  it('extracts a folder and a child playlist with the right hierarchy fields', () => {
+    const rows = [
+      buildPlaylistTreeRow({ parentId: 0, sortOrder: 0, id: 5, isFolder: true, name: 'WRTHY_all' }),
+      buildPlaylistTreeRow({ parentId: 5, sortOrder: 0, id: 6, isFolder: false, name: 'Artists' }),
+    ];
+    const buffer = buildSingleTablePdb(0x07, buildGenericRowPage(1, rows));
+    const nodes = parsePdbPlaylistTree(buffer);
+
+    expect(nodes).toEqual([
+      { id: 5, parentId: 0, name: 'WRTHY_all', isFolder: true, sortOrder: 0 },
+      { id: 6, parentId: 5, name: 'Artists', isFolder: false, sortOrder: 0 },
+    ]);
+  });
+
+  it('decodes a long/UTF-16LE playlist name, including non-ASCII text', () => {
+    const rows = [
+      buildPlaylistTreeRow({ parentId: 0, sortOrder: 0, id: 1, isFolder: false, name: 'La clé des champs', longName: true }),
+    ];
+    const buffer = buildSingleTablePdb(0x07, buildGenericRowPage(1, rows));
+    const nodes = parsePdbPlaylistTree(buffer);
+
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].name).toBe('La clé des champs');
+  });
+
+  it('returns an empty list rather than throwing when there is no playlist_tree table', () => {
+    const buffer = Buffer.alloc(PAGE_SIZE);
+    buffer.writeUInt32LE(PAGE_SIZE, 0x04);
+    buffer.writeUInt32LE(0, 0x08); // num_tables = 0
+    expect(parsePdbPlaylistTree(buffer)).toEqual([]);
+  });
+});
+
+describe('parsePdbPlaylistEntries', () => {
+  it('extracts entries in row order', () => {
+    const rows = [
+      buildPlaylistEntryRow({ entryIndex: 0, trackId: 1, playlistId: 1 }),
+      buildPlaylistEntryRow({ entryIndex: 1, trackId: 2, playlistId: 1 }),
+      buildPlaylistEntryRow({ entryIndex: 0, trackId: 9, playlistId: 2 }),
+    ];
+    const buffer = buildSingleTablePdb(0x08, buildGenericRowPage(1, rows));
+    const entries = parsePdbPlaylistEntries(buffer);
+
+    expect(entries).toEqual([
+      { entryIndex: 0, trackId: 1, playlistId: 1 },
+      { entryIndex: 1, trackId: 2, playlistId: 1 },
+      { entryIndex: 0, trackId: 9, playlistId: 2 },
+    ]);
+  });
+
+  it('returns an empty list rather than throwing when there is no playlist_entries table', () => {
+    const buffer = Buffer.alloc(PAGE_SIZE);
+    buffer.writeUInt32LE(PAGE_SIZE, 0x04);
+    buffer.writeUInt32LE(0, 0x08); // num_tables = 0
+    expect(parsePdbPlaylistEntries(buffer)).toEqual([]);
   });
 });

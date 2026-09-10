@@ -28,7 +28,10 @@ export interface CanonicalNode {
   tracks: TrackRef[];
 }
 
-export type SeratoSourceType = 'serato-folders' | 'serato-crates' | 'mixed';
+// Name predates Rekordbox support (originally Serato-only) -- kept as-is
+// rather than renamed, to avoid rippling a cosmetic rename through every
+// existing import for no functional benefit.
+export type SeratoSourceType = 'serato-folders' | 'serato-crates' | 'mixed' | 'rekordbox-playlists';
 
 export interface CanonicalTree {
   root: CanonicalNode;

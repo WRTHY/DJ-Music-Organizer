@@ -221,7 +221,7 @@ solid. Before this is ever run for real, the rollback path (restore from
 the automatic backup) gets tested and confirmed working — on its own,
 before it's ever needed.
 
-## Phase 5 — Rekordbox side (read side ported to real code; write side pending)
+## Phase 5 — Rekordbox side (read side done; write side pending)
 
 Rekordbox actually has two library formats, not one, and they're not
 equally hard. The USB/CDJ export (`export.pdb` + `exportExt.pdb`) is
@@ -235,18 +235,25 @@ the Serato crate work than originally expected. The *other* format,
 where the original "likely harder" caution still applies, and it stays
 out of scope; nothing here touches it.
 
-**Read side: done for flat tracks, not yet for playlists.** The
-validated prototype is now real, tested code —
-`packages/core/src/rekordbox/pdbReader.ts` — same async-wrapper/pure-
-parser shape as the Serato readers, with a synthetic-buffer test suite
-(`__tests__/pdbReader.test.ts`, 6 tests, all passing) covering short and
-long/UTF-16LE string encoding, multi-row pages, multi-page chain
-traversal, and index-page skipping. It extracts id/filePath/fileName/
-title per track; it does not yet read the playlist/crate-hierarchy
-tables (Rekordbox's equivalent of Serato subcrates), which is the
-natural next slice before this is genuinely comparable to the Serato
-reader's coverage. Not yet wired into IPC/UI — core-only so far, same
-pattern the Serato readers followed before the desktop app caught up.
+**Read side: done, for flat tracks and for the playlist/crate
+hierarchy.** `packages/core/src/rekordbox/pdbReader.ts` — same async-
+wrapper/pure-parser shape as the Serato readers — extracts
+id/filePath/fileName/title per track (`__tests__/pdbReader.test.ts`, now
+11 tests covering both the tracks table and the two playlist tables) and,
+as of 2026-09-10, also reads the `playlist_tree` and `playlist_entries`
+tables (Rekordbox's equivalent of Serato subcrates) and assembles them
+into this project's CanonicalTree via the new
+`packages/core/src/rekordbox/canonicalTree.ts` — the Rekordbox
+counterpart to `serato/crateDatabaseReader.ts`
+(`__tests__/canonicalTree.test.ts`, 7 tests). Validated against a second
+real export, this one from a flash drive actually burned for and used on
+real CDJ/Rekordbox hardware — 3,549 tracks, 431 playlist/folder nodes,
+4,037 entries, run end-to-end through the real compiled reader
+in-session, 0 orphaned entries, 0 leaked internal `_FolderTracks` nodes.
+Full writeup, including the `_FolderTracks` handling decision, in
+docs/decisions.md's 2026-09-10 entry. Not yet wired into IPC/UI —
+core-only so far, same pattern the Serato readers followed before the
+desktop app caught up.
 
 Write-side has a decision pending (task #22): template-modify a real,
 valid export by appending new pages to its existing table chains
