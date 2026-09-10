@@ -26,6 +26,8 @@ const api: MloApi = {
   },
   planOrganize: (args) => ipcRenderer.invoke(IPC_CHANNELS.planOrganize, args),
   executeOrganize: (args) => ipcRenderer.invoke(IPC_CHANNELS.executeOrganize, args),
+  diffBurn: (args) => ipcRenderer.invoke(IPC_CHANNELS.diffBurn, args),
+  burn: (args) => ipcRenderer.invoke(IPC_CHANNELS.burn, args),
 };
 
 contextBridge.exposeInMainWorld('mlo', api);

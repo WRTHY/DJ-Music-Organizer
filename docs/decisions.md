@@ -2,6 +2,67 @@
 
 Lightweight ADR-style log of the choices behind this project. Newest first.
 
+## 2026-09-10 — Phase 3's UI flow wired up and verified (Phase 3's software side is now fully done)
+
+The fourth and last of Phase 3's deliverables: a "Burn to flash" section
+in the desktop app, alongside the existing scan/plan/execute controls.
+
+**IPC additions**, following the exact shape every other channel in
+this app already uses: `IPC_CHANNELS.diffBurn` ("burn:diff", read-only
+preview) and `IPC_CHANNELS.burn` ("burn:execute", the real operation),
+both taking a `BurnArgs` (`tree`, `targetRoot`, optional `mode`/
+`excludedKeys`) and defined once in `shared/ipcContract.ts` so a mismatch
+between main and renderer is a compile error on both sides, same as
+everything else here.
+
+**Where the Phase 3 content-hash cache actually lives, decided now that
+it needed a real answer**: `registerIpc.ts` computes
+`path.join(app.getPath('userData'), 'track-index.json')` once and passes
+it into the two new handlers as a plain `storePath` argument -- the same
+dependency-injection shape `onProgress` already uses for scan progress.
+`ipcHandlers.ts` still imports zero Electron APIs; each `diffBurn`/`burn`
+call loads a fresh `JsonTrackIndexStore` from that path and saves it back
+at the end, rather than keeping one instance warm across calls. That's a
+deliberate choice, not an oversight: a full load/parse is cheap at
+personal-library scale (see the "Phase 3 design" entry), and it means
+this file has no hidden module-level state a test would need to know to
+reset -- every handler here is still just a plain function you can call
+directly with real arguments, exactly like `__tests__/ipcHandlers.test.ts`
+already does for scan/plan/execute.
+
+**Selection is shared, not duplicated**: burning filters the tree through
+the exact same `excludedKeys`/`filterTreeBySelection` path `planOrganize`
+already used (pulled out into a small shared `applySelection` helper) --
+unchecking a crate in the existing SelectionTree UI now leaves it out of
+a burn too, rather than needing a second, separate "what to burn"
+selection concept.
+
+**UI**: a new "Burn to flash" card (gated on having scanned a library,
+matching every other section on the page) with its own target-folder
+field -- deliberately separate from the existing "Target root" field,
+since burning writes a complete, standalone `_Serato_` structure onto a
+drive, a different destination and a different operation from the local
+canonical-tree copy the rest of the page does. "Preview burn" reports
+new/changed/unchanged counts without writing anything; "Burn" does the
+real thing and shows the verification result -- a plain warning, not a
+crash, if `verification.ok` comes back false, telling James not to
+disconnect the drive and pointing at the roadmap's failure-injection
+notes rather than pretending everything's fine.
+
+**How this got built, worth recording since it was unusual**: partway
+through, this session's file bridge to James's machine lost its shell
+(`device_bash`) -- folder listing, file staging, and file writing all
+kept working, but the ability to actually *run* anything there did not.
+Every file above was written and reviewed by hand against `@mlo/core`'s
+real, already-tested API shapes (the same `diffAgainstDestination`/
+`burnToFlash`/`JsonTrackIndexStore` signatures exercised by 70 passing
+core tests) rather than iterated against a real typecheck/test run, and
+committed to disk via the file-staging path instead of the usual shell.
+**James ran `npm run typecheck` and `npm test` on his own machine
+afterward and confirmed everything passes** -- so the code held up
+without the usual tight edit/run loop, but that loop is still how this
+project verifies itself; this was the exception, not a new normal.
+
 ## 2026-09-09 — Phase 3's burn-to-flash orchestrator, built and verified
 
 The third of Phase 3's four deliverables: `packages/core/src/serato/burnToFlash.ts`,

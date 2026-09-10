@@ -101,7 +101,7 @@ Deliverables:
   3 or 4 should be trusted against this writer until that checkpoint has
   happened at least once.
 
-## Phase 3 — Burn to flash
+## Phase 3 — Burn to flash (software side done and verified; trust gate still open)
 
 **Goal**: the feature that actually delivers "plug and play on any Serato
 rig" — take the canonical library and write a fresh, complete `_Serato_`
@@ -161,9 +161,24 @@ Deliverables, in build order:
    add-one-track-without-losing-the-others case. See `docs/decisions.md`.
    Still gated on Phase 2's still-open manual hardware checkpoint before
    this is trusted against a real target.
-4. **Not started** — UI flow: pick a target drive → preview (counts of
-   new / unchanged / changed — no "will delete" warning needed, since
-   this is additive-only) → burn → verification result shown.
+4. **Done** — a "Burn to flash" card in the desktop app: pick a target
+   drive/folder → "Preview burn" (counts of new / changed / unchanged,
+   no "will delete" warning needed since this is additive-only) →
+   "Burn" → verification result shown, with a plain warning (not a
+   crash) if `verification.ok` comes back false. New
+   `IPC_CHANNELS.diffBurn`/`.burn` channels, a `BurnArgs` contract shared
+   by both, and the content-hash cache now has a real home
+   (`app.getPath('userData')/track-index.json`). Burning respects the
+   same SelectionTree checkboxes the copy flow already has. Built while
+   this session's bridge shell to James's machine was down (see
+   `docs/decisions.md`'s 2026-09-10 entry) and verified afterward --
+   `npm run typecheck` and `npm test` both pass.
+
+**Phase 3's software side is now fully built and verified.** The one
+thing still standing between this and being trusted against a real
+drive is Phase 2's still-open manual hardware checkpoint (decision log,
+Phase 2 above) — nothing left to build, just a spare USB and a few
+minutes with real Serato.
 
 **Generalizes beyond burn-to-flash** (James, 2026-09-08): the diff step
 above already applies equally to the ordinary copy-to-canonical-tree

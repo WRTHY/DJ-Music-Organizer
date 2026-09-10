@@ -1,6 +1,8 @@
 import type {
+  BurnReport,
   CanonicalNode,
   CanonicalTree,
+  DiffSummary,
   OrganizeMode,
   OrganizePlan,
   OrganizePlanItem,
@@ -12,7 +14,17 @@ import type {
 // shared file, rather than reaching past the IPC boundary into @mlo/core
 // directly (the renderer's tsconfig doesn't even include core's types —
 // this file is the deliberate seam between them).
-export type { CanonicalNode, CanonicalTree, OrganizeMode, OrganizePlan, OrganizePlanItem, OrganizeReport, ScanProgress };
+export type {
+  BurnReport,
+  CanonicalNode,
+  CanonicalTree,
+  DiffSummary,
+  OrganizeMode,
+  OrganizePlan,
+  OrganizePlanItem,
+  OrganizeReport,
+  ScanProgress,
+};
 
 /**
  * The whole IPC surface between the renderer and the main process, in one
@@ -37,6 +49,12 @@ export const IPC_CHANNELS = {
   scanProgress: 'serato:scanProgress',
   planOrganize: 'organize:plan',
   executeOrganize: 'organize:execute',
+  // Phase 3 (docs/roadmap.md): burn-to-flash. diffBurn is a read-only
+  // preview (still hashes and caches, since that work isn't wasted --
+  // see main/ipcHandlers.ts) that never touches the target volume; burn
+  // is the real, write-capable operation.
+  diffBurn: 'burn:diff',
+  burn: 'burn:execute',
 } as const;
 
 export interface DetectSeratoSourceResult {
@@ -71,6 +89,20 @@ export interface ExecuteOrganizeArgs {
   dryRun: boolean;
 }
 
+/**
+ * Shared by both burn-related calls (Phase 3, docs/roadmap.md): a target
+ * volume/drive to burn onto, plus the same tree + selection the ordinary
+ * copy flow already uses -- burning respects whatever's checked in the
+ * SelectionTree just like planOrganize does, rather than introducing a
+ * second, separate selection concept.
+ */
+export interface BurnArgs {
+  tree: CanonicalTree;
+  targetRoot: string;
+  mode?: OrganizeMode;
+  excludedKeys?: string[];
+}
+
 /** The API surface the preload script exposes on `window.mlo`. */
 export interface MloApi {
   selectFolder(): Promise<string | null>;
@@ -86,4 +118,8 @@ export interface MloApi {
   onScanProgress(callback: (progress: ScanProgress) => void): () => void;
   planOrganize(args: PlanOrganizeArgs): Promise<OrganizePlan>;
   executeOrganize(args: ExecuteOrganizeArgs): Promise<OrganizeReport>;
+  /** Read-only preview: counts what's new/unchanged/changed without writing anything to targetRoot. */
+  diffBurn(args: BurnArgs): Promise<DiffSummary>;
+  /** The real burn -- copies what's new/changed, then regenerates the full crate database and verifies it. */
+  burn(args: BurnArgs): Promise<BurnReport>;
 }

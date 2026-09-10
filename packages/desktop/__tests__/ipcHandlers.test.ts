@@ -2,7 +2,9 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  burn,
   detectSeratoSource,
+  diffBurn,
   executeOrganize,
   planOrganize,
   scanCrateDatabase,
@@ -89,6 +91,83 @@ describe('ipcHandlers', () => {
 
     const copied = await fs.readFile(path.join(targetRoot, 'House', 'track1.mp3'), 'utf8');
     expect(copied).toBe('content-1');
+  });
+});
+
+/**
+ * diffBurn/burn (Phase 3, docs/roadmap.md). Both take a `storePath` the
+ * same way scanFolderTree/scanCrateDatabase take an optional onProgress
+ * -- a plain, explicit parameter rather than reaching into Electron's
+ * app.getPath() themselves, so these stay ordinary functions a test can
+ * call directly with a real tmp file, no Electron runtime involved.
+ */
+describe('diffBurn / burn', () => {
+  let sourceRoot: string;
+  let burnTarget: string;
+  let storePath: string;
+
+  beforeEach(async () => {
+    sourceRoot = await makeTmpDir('mlo-ipc-burn-source-');
+    burnTarget = await makeTmpDir('mlo-ipc-burn-target-');
+    const storeDir = await makeTmpDir('mlo-ipc-burn-index-');
+    storePath = path.join(storeDir, 'index.json');
+    await fs.mkdir(path.join(sourceRoot, 'House'), { recursive: true });
+    await fs.writeFile(path.join(sourceRoot, 'House', 'track1.mp3'), 'content-1');
+  });
+
+  afterEach(async () => {
+    await fs.rm(sourceRoot, { recursive: true, force: true });
+    await fs.rm(burnTarget, { recursive: true, force: true });
+  });
+
+  it('diffBurn reports what would happen without writing anything', async () => {
+    const tree = await scanFolderTree(sourceRoot);
+    const summary = await diffBurn({ tree, targetRoot: burnTarget }, storePath);
+
+    expect(summary).toEqual({ new: 1, unchanged: 0, changed: 0 });
+    const targetExists = await fs
+      .access(path.join(burnTarget, 'House', 'track1.mp3'))
+      .then(() => true, () => false);
+    expect(targetExists).toBe(false);
+  });
+
+  it('burn copies the audio and writes a crate database that verifies clean', async () => {
+    const tree = await scanFolderTree(sourceRoot);
+    const report = await burn({ tree, targetRoot: burnTarget }, storePath);
+
+    expect(report.organizeReport.summary.copied).toBe(1);
+    expect(report.verification.ok).toBe(true);
+
+    const copied = await fs.readFile(path.join(burnTarget, 'House', 'track1.mp3'), 'utf8');
+    expect(copied).toBe('content-1');
+    const crateFiles = await fs.readdir(path.join(burnTarget, '_Serato_', 'Subcrates'));
+    expect(crateFiles).toContain('House.crate');
+  });
+
+  it('a second burn with no source changes copies nothing but still verifies clean', async () => {
+    const tree = await scanFolderTree(sourceRoot);
+    await burn({ tree, targetRoot: burnTarget }, storePath);
+
+    const secondReport = await burn({ tree, targetRoot: burnTarget }, storePath);
+    expect(secondReport.organizeReport.summary.copied).toBe(0);
+    expect(secondReport.diffSummary).toEqual({ new: 0, unchanged: 1, changed: 0 });
+    expect(secondReport.verification.ok).toBe(true);
+  });
+
+  it('burn respects excludedKeys the same way planOrganize does', async () => {
+    await fs.mkdir(path.join(sourceRoot, 'Techno'), { recursive: true });
+    await fs.writeFile(path.join(sourceRoot, 'Techno', 'track2.mp3'), 'content-2');
+
+    const tree = await scanFolderTree(sourceRoot);
+    const report = await burn({ tree, targetRoot: burnTarget, excludedKeys: ['Techno'] }, storePath);
+
+    expect(report.organizeReport.summary.copied).toBe(1);
+    const technoExists = await fs
+      .access(path.join(burnTarget, 'Techno', 'track2.mp3'))
+      .then(() => true, () => false);
+    expect(technoExists).toBe(false);
+    const crateFiles = await fs.readdir(path.join(burnTarget, '_Serato_', 'Subcrates'));
+    expect(crateFiles).not.toContain('Techno.crate');
   });
 });
 

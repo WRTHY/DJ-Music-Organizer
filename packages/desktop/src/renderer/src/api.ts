@@ -5,9 +5,11 @@
 import type { CanonicalTree, OrganizeMode, OrganizePlan } from '../../shared/ipcContract';
 
 export type {
+  BurnReport,
   CanonicalNode,
   CanonicalTree,
   DetectSeratoSourceResult,
+  DiffSummary,
   OrganizeMode,
   OrganizePlan,
   OrganizePlanItem,
@@ -42,4 +44,22 @@ export function planOrganize(
 
 export function executeOrganize(plan: OrganizePlan, dryRun: boolean) {
   return window.mlo.executeOrganize({ plan, dryRun });
+}
+
+export function diffBurn(
+  tree: CanonicalTree,
+  targetRoot: string,
+  mode: OrganizeMode = 'copy',
+  excludedKeys?: string[]
+) {
+  return window.mlo.diffBurn({ tree, targetRoot, mode, excludedKeys });
+}
+
+export function burn(
+  tree: CanonicalTree,
+  targetRoot: string,
+  mode: OrganizeMode = 'copy',
+  excludedKeys?: string[]
+) {
+  return window.mlo.burn({ tree, targetRoot, mode, excludedKeys });
 }

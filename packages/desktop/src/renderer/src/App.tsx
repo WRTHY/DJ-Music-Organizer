@@ -1,9 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  BurnReport,
   CanonicalTree,
+  DiffSummary,
   OrganizePlan,
   OrganizeReport,
   ScanProgress,
+  burn,
+  diffBurn,
   executeOrganize,
   planOrganize,
   scanCrateDatabase,
@@ -24,7 +28,7 @@ import styles from './App.module.css';
 // each, because the actions are sequential and share state (you can't
 // plan while a scan is still landing, execute reads the last plan, etc.)
 // — so every button disables while any one of them is in flight.
-type ActionKey = 'scan' | 'plan' | 'dryRun' | 'execute';
+type ActionKey = 'scan' | 'plan' | 'dryRun' | 'execute' | 'diffBurn' | 'burn';
 type ScanMode = 'folders' | 'crates';
 
 function countTracks(tree: CanonicalTree): number {
@@ -63,6 +67,15 @@ export default function App() {
   const [excludedKeys, setExcludedKeys] = useState<Set<string>>(new Set());
   const [plan, setPlan] = useState<OrganizePlan | null>(null);
   const [report, setReport] = useState<OrganizeReport | null>(null);
+
+  // Phase 3: burn to flash. A separate destination from targetRoot above --
+  // targetRoot is the local canonical-tree copy, burnTarget is a drive/
+  // folder getting a full, standalone _Serato_ structure written onto it.
+  // Deliberately shares `tree` and `excludedKeys` with the copy flow rather
+  // than introducing a second scan/selection just for burning.
+  const [burnTarget, setBurnTarget] = useState('');
+  const [diffSummary, setDiffSummary] = useState<DiffSummary | null>(null);
+  const [burnReport, setBurnReport] = useState<BurnReport | null>(null);
 
   const [loadingAction, setLoadingAction] = useState<ActionKey | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -109,6 +122,8 @@ export default function App() {
         setExcludedKeys(new Set());
         setPlan(null);
         setReport(null);
+        setDiffSummary(null);
+        setBurnReport(null);
       }
     );
   };
@@ -134,6 +149,34 @@ export default function App() {
         return executeOrganize(plan, dryRun);
       },
       setReport
+    );
+
+  const handleDiffBurn = () =>
+    run(
+      'diffBurn',
+      () => {
+        if (!tree) throw new Error('Scan a library first.');
+        if (!burnTarget) throw new Error('Choose a burn target first.');
+        return diffBurn(tree, burnTarget, 'copy', Array.from(excludedKeys));
+      },
+      (result) => {
+        setDiffSummary(result);
+        setBurnReport(null);
+      }
+    );
+
+  const handleBurn = () =>
+    run(
+      'burn',
+      () => {
+        if (!tree) throw new Error('Scan a library first.');
+        if (!burnTarget) throw new Error('Choose a burn target first.');
+        return burn(tree, burnTarget, 'copy', Array.from(excludedKeys));
+      },
+      (result) => {
+        setBurnReport(result);
+        setDiffSummary(result.diffSummary);
+      }
     );
 
   return (
@@ -293,6 +336,74 @@ export default function App() {
               </li>
             ))}
           </ul>
+        </Card>
+      )}
+
+      {tree && (
+        <Card tone="alt" as="section" className={styles.section}>
+          <h2>Burn to flash</h2>
+          <p className={styles.subtitle}>
+            Writes a complete, standalone Serato structure onto a drive or folder — audio files
+            plus a freshly regenerated crate database — separate from the target root above. Safe
+            to run more than once: a track already burned there is skipped, not re-copied, unless
+            its content has actually changed. Respects the same crate/folder selection as the copy
+            flow above.
+          </p>
+
+          <FolderField
+            label="Burn target (a drive or folder — never your live E:\_Serato_ until the Phase 2 hardware checkpoint has happened)"
+            value={burnTarget}
+            onChange={setBurnTarget}
+            onBrowse={pickFolder(setBurnTarget)}
+          />
+
+          <div className={styles.actions}>
+            <Button
+              onClick={handleDiffBurn}
+              disabled={!tree || !burnTarget || isBusy}
+              loading={loadingAction === 'diffBurn'}
+            >
+              {loadingAction === 'diffBurn' ? 'Comparing…' : 'Preview burn'}
+            </Button>
+            <Button
+              variant="primary"
+              onClick={handleBurn}
+              disabled={!tree || !burnTarget || isBusy}
+              loading={loadingAction === 'burn'}
+            >
+              {loadingAction === 'burn' ? 'Burning…' : 'Burn'}
+            </Button>
+          </div>
+
+          {diffSummary && (
+            <p>
+              {diffSummary.new} new &middot; {diffSummary.changed} changed &middot;{' '}
+              {diffSummary.unchanged} already up to date
+            </p>
+          )}
+
+          {burnReport && (
+            <>
+              <p
+                role={burnReport.verification.ok ? undefined : 'alert'}
+                className={burnReport.verification.ok ? styles.subtitle : styles.error}
+              >
+                {burnReport.verification.ok
+                  ? 'Verified: every track on the target volume reads back correctly.'
+                  : `Verification found a problem — ${burnReport.verification.unresolvedCount} unresolved, ` +
+                    `${burnReport.verification.missingTrackIds.length} missing, ` +
+                    `${burnReport.verification.unexpectedTrackIds.length} unexpected. Don't disconnect the ` +
+                    'drive — see docs/roadmap.md\u2019s Phase 3 failure-injection notes before retrying.'}
+              </p>
+              <ul className={styles.reportList}>
+                {Object.entries(burnReport.organizeReport.summary).map(([status, count]) => (
+                  <li key={status}>
+                    {status}: {count}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
         </Card>
       )}
     </main>
