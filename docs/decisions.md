@@ -2,6 +2,160 @@
 
 Lightweight ADR-style log of the choices behind this project. Newest first.
 
+## 2026-09-10 — Independent-oracle cross-check of the Rekordbox reader: exact match, plus a corrected row-count safety finding
+
+James asked directly: "take a look at pyrekordbox and this repo and cross
+check our process" (`davehenke/rekordbox-mcp`). This is the kind of
+check that answers "is this even the right way to be parsing this,"
+independent of anything Claude or this project wrote -- the previous
+entry's "self-verification has a hard ceiling" point, actually acted on
+rather than just stated.
+
+**`pyrekordbox` (dylanljones) does not apply here -- correcting my own
+prior suggestion.** I had recommended it earlier without verifying it.
+On inspection, its API only covers the newer `exportLibrary.db`
+SQLite-based "Device Library Plus" format used by newer hardware
+(OPUS-QUAD, OMNIS-DUO, XDJ-AZ); it does not read the classic
+`export.pdb`/`exportExt.pdb` format this project targets, at all. Ruled
+out, not used.
+
+**`davehenke/rekordbox-mcp` is a live-database tool, not a USB-export
+tool.** It's an MCP server wrapping `pyrekordbox` against Rekordbox's own
+local encrypted `master.db`, for querying your collection from an
+assistant -- a different problem (live app database vs. a burned USB
+export) and not directly comparable to this project's read/write path.
+
+**`fragmede/rekordbox-pdb`** (Python, MIT, dependency-free) turned out to
+be the real find: an independently-written, independently-maintained
+parser of the exact classic `export.pdb`/`exportExt.pdb` format this
+project reads, with its own from-scratch format documentation
+(`FORMAT.md`) cross-checked by its author against Deep Symmetry's
+Kaitai/crate-digger spec. This is a genuine independent oracle. Cloned
+it, installed it, and ran it against the real hardware-burned
+3,549-track/431-node/4,037-entry library (the same drive used to build
+and validate the playlist reader), then built a from-scratch Python
+reimplementation of `buildCanonicalTreeFromPlaylists`'s exact fold logic
+on top of its parsed output, and diffed that against the TypeScript
+implementation's own output on the same file, flattened by full node
+path.
+
+**Result: exact match. 393/393 canonical nodes (392 real + the synthetic
+root), 0 paths only in one side, 0 mismatched paths.** Table layout,
+table type numbers (7 = playlist_tree, 8 = playlist_entries),
+`playlist_tree`'s row layout, and `playlist_entries`'s row layout all
+match FORMAT.md byte-for-byte against this project's own
+`pdbReader.ts`. One new fact worth carrying forward: **playlist ids are
+not stable across re-exports** -- Rekordbox reassigns them when the USB
+is re-exported -- which should inform the still-undecided Rekordbox
+write-side design (task in `roadmap.md`; template-modify approach looks
+more right than "reuse ids across exports" in light of this).
+
+**A specific, known bug class was checked against and ruled out.**
+FORMAT.md documents that the widely-used "`num_rows_large` (@0x22) if
+larger and ≠ 0x1fff" heuristic for a page's row/slot count --
+used by crate-digger, and (per FORMAT.md's own note) by earlier versions
+of *this* project -- is wrong: @0x22 holds the slot count as of the
+page's *previous* write, and on any page that ever exceeded 255 slots it
+silently drops rows (FORMAT.md cites a real 713-track export that loses
+78 live history entries this way). This is exactly the kind of
+issue this whole exercise exists to catch -- silent data loss, not a
+crash. Checked our current `readRowOffsets`
+(`packages/core/src/rekordbox/pdbReader.ts`): it does **not** read
+@0x22 at all, and never has, as far as this cross-check reaches. It
+reads `u8@0x18` combined with the low bits of the `u16@0x19`, masked to
+13 bits. Algebraically, that reduces to FORMAT.md's stated-correct
+formula (`n = u8@0x18 + 0x100 * (u8@0x19 & 1)`) on every valid page,
+because the bits our mask keeps beyond bit 0 of `u19` (bits 1-4) are
+structurally always zero there (`u16@0x19` is `0x20 * present_rows` with
+only bit 0 repurposed as the overflow flag, and 0x20 is a multiple of
+32, so bits 0-4 of a clean multiple of 32 are 0 except for the one bit
+that got overridden). So the two formulas are not just similar, they are
+the same function on every real page. This is corroborated empirically,
+not just algebraically: `playlist_entries` rows are 12 bytes each, so a
+4096-byte page holds on the order of 300+ of them -- comfortably over
+the 255-slot threshold where the buggy heuristic fails -- and all 4,037
+real entries round-tripped with zero mismatches against the independent
+library above. **Conclusion: this project's row-count decoding was
+already correct and is not vulnerable to this bug class** -- no code
+change required, only this finding recorded so the reasoning doesn't
+have to be redone from scratch later.
+
+**What this doesn't prove**: still not a substitute for a real CDJ/XDJ
+actually reading the drive -- it proves this project's parser agrees
+with a second, independently-written parser on the same real,
+hardware-burned file, which is the strongest check available without
+hardware, not equivalent to hardware itself.
+
+## 2026-09-10 — Burn verification closes a real gap: a track silently reassigned to the wrong crate was invisible to it
+
+James raised a legitimate worry, not an edge case to wave off: he has no
+CDJ/Rekordbox hardware to test a burn against, has previously trusted a
+burn that turned out to have a folder wrong once he actually got to a
+gig, and asked whether there's any way to validate a burn will actually
+work without hardware in hand. Two separate things are true at once
+here, and both are worth saying plainly rather than picking the
+comfortable one:
+
+**There is a hard ceiling on what self-verification can prove.**
+`verifyBurn` reads the just-written crate database back with this
+project's *own* reader and compares it to what was intended. That can
+only prove internal self-consistency -- that the writer and the reader
+agree with each other -- never that real Serato (or, once Phase 5's
+write side exists, a real CDJ) agrees too. If the reader and writer ever
+shared a wrong assumption about the format, a round-trip check would
+stay green while the real application silently disagreed. No amount of
+re-reading our own output changes that; only an independent oracle
+would (a second, differently-written parser; or the real application
+actually opening the drive). That's a real limit, not a gap to code
+around, and it's worth being honest about rather than implying this
+tool can fully replace an eyes-on check with real Serato/hardware.
+
+**But within that ceiling, this specific check was weaker than it
+should have been -- and now isn't.** Re-reading `verifyBurn`
+(`packages/core/src/serato/burnToFlash.ts`) while answering James's
+question found it compared `missingTrackIds`/`unexpectedTrackIds` as
+**flat, library-wide sets of track ids** -- "does this track exist
+*somewhere* in the burned library." A bug that silently reassigned a
+track from one crate to a different one wouldn't change that set at
+all: the track still exists exactly once, library-wide, just under the
+wrong crate. That is *precisely* James's "rolled up to the club and a
+folder was missing" failure mode, and the check as it stood could not
+have caught it -- it would have reported `ok: true`.
+
+**Fix**: extracted the comparison into a new pure, exported function,
+`diffTrackPlacement(expectedTree, actualTree)`, which groups track ids
+by crate path on both sides and adds a third category alongside the
+existing two: `misplacedTrackIds` -- a track that exists in the burned
+library and was expected somewhere, just not under the crate it's
+supposed to be in. `BurnVerification.ok` now requires this to be empty
+too. Deliberately kept filesystem-free and separately exported (rather
+than inlined in `verifyBurn`) specifically so the placement-comparison
+logic itself can be unit-tested against hand-built trees without a real
+burn -- 5 new tests in `burnToFlash.test.ts`, including the exact
+swapped-crates scenario ("same two tracks, same total count, nothing
+missing or extra library-wide, just under the wrong crate each") and a
+"moved one folder level up" variant, confirming both are caught as
+`misplaced`, not silently passed as `missing`/`unexpected` cancelling
+each other out. `core` suite is now 87 tests (up from 82), all green,
+clean typecheck, run in the same scratch checkout used to validate the
+Rekordbox work above.
+
+**What this doesn't solve, and what would go further**: this closes one
+concrete, previously-real gap in self-verification -- it does not
+provide independent, hardware-level proof. Discussed with James as
+further options, not yet decided or built: (a) if he has the Rekordbox
+or Serato desktop *software* anywhere, pointing it at a burned volume
+is a far cheaper oracle than a physical CDJ and doesn't require a club
+trip; (b) cross-validating a burned/exported drive against a second,
+independently-written parser (e.g. `pyrekordbox` for the Rekordbox
+side) that doesn't share this project's own reader's blind spots would
+be the strongest available proof short of real hardware; (c) for
+Rekordbox's still-undecided write side (task #22), the
+template-modify-a-real-export approach already favored is inherently
+lower-risk than generating a file from scratch for exactly this reason
+-- it leaves the overwhelming majority of a real, hardware-proven file
+untouched.
+
 ## 2026-09-10 — Rekordbox reader extended to playlist/crate hierarchy, validated against real hardware
 
 Phase 5's "read side, playlists" slice (see docs/roadmap.md) — the natural

@@ -150,8 +150,9 @@ Deliverables, in build order:
    (copy only what changed, `allowOverwrite: true`) → execute →
    `writeCrateDatabase` (Phase 2) to regenerate the *entire* crate
    structure at the target → a verification pass that reads the result
-   back with the real reader and compares track ids against what was
-   expected (`ok`/`unresolvedCount`/`missingTrackIds`/`unexpectedTrackIds`).
+   back with the real reader and compares track placement against what
+   was expected
+   (`ok`/`unresolvedCount`/`missingTrackIds`/`unexpectedTrackIds`/`misplacedTrackIds`).
    Along the way, found and closed a real bug-in-waiting: crate
    generation needs every track's *destination* path, not just the ones
    copied this run, or an `unchanged` track would silently disappear from
@@ -159,6 +160,15 @@ Deliverables, in build order:
    fine on disk — fixed via `treeAtDestination` in `organizer/diff.ts`,
    built from the full diff. 6 tests, including that exact
    add-one-track-without-losing-the-others case. See `docs/decisions.md`.
+   **Verification strengthened 2026-09-10**: the original comparison was
+   a flat, library-wide set of track ids, which couldn't tell a track
+   apart from that same track silently reassigned to a *different*
+   crate — exactly James's "burn looked fine, folder was missing at the
+   club" fear. `diffTrackPlacement` now compares per-crate-path and adds
+   `misplacedTrackIds` to catch that case specifically; 5 new tests
+   including the swapped-crates scenario. Full write-up, including the
+   honest limits of self-verification and further options discussed but
+   not yet built, in `docs/decisions.md`.
    Still gated on Phase 2's still-open manual hardware checkpoint before
    this is trusted against a real target.
 4. **Done** — a "Burn to flash" card in the desktop app: pick a target

@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { CanonicalNode, CanonicalTree, TrackRef, allTracks, emptyNode } from '../src/types';
 import { idForPath } from '../src/serato/hash';
-import { burnToFlash } from '../src/serato/burnToFlash';
+import { burnToFlash, diffTrackPlacement } from '../src/serato/burnToFlash';
 import { JsonTrackIndexStore } from '../src/trackIndex/trackIndexStore';
 
 /**
@@ -181,5 +181,75 @@ describe('burnToFlash', () => {
 
     const copied = await fs.readFile(path.join(volumeDir, 'House', 'Deep House', 'deep.mp3'), 'utf8');
     expect(copied).toBe('deep content');
+  });
+});
+
+/**
+ * `diffTrackPlacement` directly, no burn/filesystem involved -- this is
+ * the specific gap raised 2026-09-10: comparing burned output against
+ * the intended tree as a flat set of "does this track id exist
+ * anywhere" cannot tell a track apart from the *same* track silently
+ * reassigned to the wrong crate, which is exactly the "burn looked
+ * clean but a folder was wrong once I got to the club" failure mode.
+ * These prove the per-crate-path comparison actually distinguishes
+ * "missing," "unexpected," and "misplaced" from each other, hand-built
+ * so a real burn/writer bug isn't needed to exercise the detection.
+ */
+describe('diffTrackPlacement', () => {
+  it('reports no differences when both trees place every track the same way', () => {
+    const trackA = track('/lib/a.mp3');
+    const trackB = track('/lib/b.mp3');
+    const expected = treeOf(node('', [], [], [node('House', ['House'], [trackA]), node('Techno', ['Techno'], [trackB])]));
+    const actual = treeOf(node('', [], [], [node('House', ['House'], [trackA]), node('Techno', ['Techno'], [trackB])]));
+
+    expect(diffTrackPlacement(expected, actual)).toEqual({
+      missingTrackIds: [],
+      unexpectedTrackIds: [],
+      misplacedTrackIds: [],
+    });
+  });
+
+  it('catches two tracks silently swapped between crates, even though every track id still exists somewhere', () => {
+    const trackA = track('/lib/a.mp3');
+    const trackB = track('/lib/b.mp3');
+    const expected = treeOf(node('', [], [], [node('House', ['House'], [trackA]), node('Techno', ['Techno'], [trackB])]));
+    // Same two tracks, same total count, nothing missing or extra library-wide -- just under the wrong crate each.
+    const actual = treeOf(node('', [], [], [node('House', ['House'], [trackB]), node('Techno', ['Techno'], [trackA])]));
+
+    const result = diffTrackPlacement(expected, actual);
+    expect(result.missingTrackIds).toEqual([]);
+    expect(result.unexpectedTrackIds).toEqual([]);
+    expect(result.misplacedTrackIds.sort()).toEqual([trackA.id, trackB.id].sort());
+  });
+
+  it('reports a track missing everywhere as missing, not misplaced', () => {
+    const trackA = track('/lib/a.mp3');
+    const expected = treeOf(node('House', ['House'], [trackA]));
+    const actual = treeOf(node('House', ['House'], []));
+
+    const result = diffTrackPlacement(expected, actual);
+    expect(result.missingTrackIds).toEqual([trackA.id]);
+    expect(result.misplacedTrackIds).toEqual([]);
+  });
+
+  it('reports a track the tree never expected anywhere as unexpected', () => {
+    const trackA = track('/lib/a.mp3');
+    const expected = treeOf(node('House', ['House'], []));
+    const actual = treeOf(node('House', ['House'], [trackA]));
+
+    const result = diffTrackPlacement(expected, actual);
+    expect(result.unexpectedTrackIds).toEqual([trackA.id]);
+    expect(result.misplacedTrackIds).toEqual([]);
+  });
+
+  it('treats a track moved one level up (folder to its own parent) as misplaced, not missing', () => {
+    const trackA = track('/lib/a.mp3');
+    const expected = treeOf(node('House', ['House'], [], [node('Deep House', ['House', 'Deep House'], [trackA])]));
+    const actual = treeOf(node('House', ['House'], [trackA])); // same track, one path segment shorter
+
+    const result = diffTrackPlacement(expected, actual);
+    expect(result.missingTrackIds).toEqual([]);
+    expect(result.unexpectedTrackIds).toEqual([]);
+    expect(result.misplacedTrackIds).toEqual([trackA.id]);
   });
 });

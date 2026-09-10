@@ -8,6 +8,7 @@ import type {
   OrganizePlanItem,
   OrganizeReport,
   ScanProgress,
+  SeratoSourceType,
 } from '@mlo/core';
 
 // Re-exported so renderer code imports everything it needs from this one
@@ -24,6 +25,7 @@ export type {
   OrganizePlanItem,
   OrganizeReport,
   ScanProgress,
+  SeratoSourceType,
 };
 
 /**
@@ -58,7 +60,15 @@ export const IPC_CHANNELS = {
 } as const;
 
 export interface DetectSeratoSourceResult {
-  sourceType: 'serato-folders' | 'serato-crates' | 'mixed';
+  // Was a hand-duplicated 3-value literal union; that's exactly the kind
+  // of drift this file's re-export pattern (see the comment above) exists
+  // to prevent -- it fell out of sync when SeratoSourceType grew a 4th
+  // value ('rekordbox-playlists') for the Rekordbox reader, breaking the
+  // build. Sourced from @mlo/core directly instead so this can't happen
+  // again. detectSourceType() itself only ever produces the original
+  // three today (Rekordbox detection isn't wired into this IPC call yet)
+  // -- the wider type just matches its real, already-widened return type.
+  sourceType: SeratoSourceType;
   hasSubcratesDir: boolean;
   subcratesDir: string | null;
   hasRealSubfolders: boolean;

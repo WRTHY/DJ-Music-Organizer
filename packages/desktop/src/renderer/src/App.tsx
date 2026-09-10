@@ -389,10 +389,11 @@ export default function App() {
                 className={burnReport.verification.ok ? styles.subtitle : styles.error}
               >
                 {burnReport.verification.ok
-                  ? 'Verified: every track on the target volume reads back correctly.'
+                  ? 'Verified: every track on the target volume reads back correctly, in the right crate.'
                   : `Verification found a problem — ${burnReport.verification.unresolvedCount} unresolved, ` +
                     `${burnReport.verification.missingTrackIds.length} missing, ` +
-                    `${burnReport.verification.unexpectedTrackIds.length} unexpected. Don't disconnect the ` +
+                    `${burnReport.verification.unexpectedTrackIds.length} unexpected, ` +
+                    `${burnReport.verification.misplacedTrackIds.length} in the wrong crate. Don't disconnect the ` +
                     'drive — see docs/roadmap.md\u2019s Phase 3 failure-injection notes before retrying.'}
               </p>
               <ul className={styles.reportList}>
