@@ -51,6 +51,19 @@ function countSelectedTracks(node: CanonicalTree['root'], excludedKeys: Set<stri
   return node.tracks.length + node.children.reduce((sum: number, c: CanonicalTree['root']) => sum + countSelectedTracks(c, excludedKeys), 0);
 }
 
+// "Select none" excludes every *top-level* child, not the root itself --
+// @mlo/core's filterTreeBySelection (organizer/selection.ts) deliberately
+// never lets the root be excluded (a tree with nothing selected is
+// represented as "every top-level node excluded," not "the root is
+// excluded"), so excluding the root's own key here would show 0 selected
+// in this preview while the real burn/plan still copied everything. This
+// stays consistent with that by construction: excluding a node already
+// excludes its whole subtree, so listing just the direct children is
+// enough, no need to walk deeper.
+function topLevelKeys(root: CanonicalTree['root']): Set<string> {
+  return new Set(root.children.map((child) => child.path.join('/')));
+}
+
 export default function App() {
   const [scanMode, setScanMode] = useState<ScanMode>('crates');
 
@@ -292,8 +305,17 @@ export default function App() {
           </p>
           <p className={styles.subtitle}>
             Uncheck a crate or folder to leave it out of the copy — unchecking a parent leaves out
-            everything inside it too.
+            everything inside it too. Use the buttons below to start from either end instead of
+            clicking through every box.
           </p>
+          <div className={styles.actions}>
+            <Button onClick={() => setExcludedKeys(new Set())} disabled={isBusy}>
+              Select all
+            </Button>
+            <Button onClick={() => setExcludedKeys(topLevelKeys(tree.root))} disabled={isBusy}>
+              Select none
+            </Button>
+          </div>
           <div className={styles.tableWrap}>
             <SelectionTree root={tree.root} excludedKeys={excludedKeys} onChange={setExcludedKeys} />
           </div>
