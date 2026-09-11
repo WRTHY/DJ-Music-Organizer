@@ -137,6 +137,16 @@ export default function App() {
   // Deliberately shares `tree` and `excludedKeys` with the copy flow rather
   // than introducing a second scan/selection just for burning.
   const [burnTarget, setBurnTarget] = useState('');
+  // "Use the same folder as Target root" -- the billing/shipping-address
+  // pattern James asked for, since the two fields are legitimately
+  // different destinations (see the field-audit note in docs/decisions.md,
+  // 2026-09-11) but are very often the same path in practice. Kept as its
+  // own flag plus the raw `burnTarget` value, rather than copying
+  // targetRoot into burnTarget once on check -- a live link (computed
+  // below as `effectiveBurnTarget`) means editing Target root afterward
+  // keeps both in sync, and unchecking restores whatever was typed into
+  // Burn target before, instead of losing it.
+  const [burnTargetSameAsTargetRoot, setBurnTargetSameAsTargetRoot] = useState(false);
   const [diffSummary, setDiffSummary] = useState<DiffSummary | null>(null);
   const [burnReport, setBurnReport] = useState<BurnReport | null>(null);
 
@@ -156,6 +166,9 @@ export default function App() {
   );
   const canScan = scanMode === 'folders' ? !!rootPath : !!subcratesDir && !!volumeRoot;
   const isBusy = loadingAction !== null;
+  // The value every burn action and the Burn target field itself should
+  // actually use -- see the burnTargetSameAsTargetRoot state comment above.
+  const effectiveBurnTarget = burnTargetSameAsTargetRoot ? targetRoot : burnTarget;
 
   async function run<T>(key: ActionKey, action: () => Promise<T>, onSuccess: (result: T) => void) {
     setLoadingAction(key);
@@ -227,8 +240,8 @@ export default function App() {
       'diffBurn',
       () => {
         if (!tree) throw new Error('Scan a library first.');
-        if (!burnTarget) throw new Error('Choose a burn target first.');
-        return diffBurn(tree, burnTarget, 'copy', Array.from(excludedKeys));
+        if (!effectiveBurnTarget) throw new Error('Choose a burn target first.');
+        return diffBurn(tree, effectiveBurnTarget, 'copy', Array.from(excludedKeys));
       },
       (result) => {
         setDiffSummary(result);
@@ -241,8 +254,8 @@ export default function App() {
       'burn',
       () => {
         if (!tree) throw new Error('Scan a library first.');
-        if (!burnTarget) throw new Error('Choose a burn target first.');
-        return burn(tree, burnTarget, 'copy', Array.from(excludedKeys));
+        if (!effectiveBurnTarget) throw new Error('Choose a burn target first.');
+        return burn(tree, effectiveBurnTarget, 'copy', Array.from(excludedKeys));
       },
       (result) => {
         setBurnReport(result);
@@ -442,17 +455,29 @@ export default function App() {
             flow above.
           </p>
 
+          <div className={styles.modeRow}>
+            <label>
+              <input
+                type="checkbox"
+                checked={burnTargetSameAsTargetRoot}
+                onChange={(e) => setBurnTargetSameAsTargetRoot(e.target.checked)}
+              />{' '}
+              Use the same folder as "Target root" above
+            </label>
+          </div>
+
           <FolderField
             label="Burn target (a drive or folder — never your live E:\_Serato_ until the Phase 2 hardware checkpoint has happened)"
-            value={burnTarget}
+            value={effectiveBurnTarget}
             onChange={setBurnTarget}
             onBrowse={pickFolder(setBurnTarget)}
+            disabled={burnTargetSameAsTargetRoot}
           />
 
           <div className={styles.actions}>
             <Button
               onClick={handleDiffBurn}
-              disabled={!tree || !burnTarget || isBusy}
+              disabled={!tree || !effectiveBurnTarget || isBusy}
               loading={loadingAction === 'diffBurn'}
             >
               {loadingAction === 'diffBurn' ? 'Comparing…' : 'Preview burn'}
@@ -460,7 +485,7 @@ export default function App() {
             <Button
               variant="primary"
               onClick={handleBurn}
-              disabled={!tree || !burnTarget || isBusy}
+              disabled={!tree || !effectiveBurnTarget || isBusy}
               loading={loadingAction === 'burn'}
             >
               {loadingAction === 'burn' ? 'Burning…' : 'Burn'}

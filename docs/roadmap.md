@@ -184,11 +184,22 @@ Deliverables, in build order:
    `docs/decisions.md`'s 2026-09-10 entry) and verified afterward --
    `npm run typecheck` and `npm test` both pass.
 
-**Phase 3's software side is now fully built and verified.** The one
-thing still standing between this and being trusted against a real
-drive is Phase 2's still-open manual hardware checkpoint (decision log,
-Phase 2 above) — nothing left to build, just a spare USB and a few
-minutes with real Serato.
+**Update, 2026-09-11 — the manual hardware checkpoint happened, and it
+found a real gap.** The diff/plan/execute/verify pipeline itself is
+proven against real hardware: a real burn to `D:\TRIAL_BURN` copied
+330/335 tracks correctly, and the 5 that failed traced to unrelated,
+pre-existing stale metadata in Serato's own crate data (see
+`docs/decisions.md`), not this pipeline. But opening that drive in real
+Serato showed nothing — `.crate` files reference tracks by pointing
+into Serato's master `database V2` index, which this project has never
+written, so a track this project burns is invisible to Serato's UI
+until something (Serato itself, manually, today) tells `database V2`
+about it. **"Phase 3's software side is now fully built and verified"
+was premature** — the diff/burn/verify mechanics are solid, but
+"Serato recognizes a freshly burned drive" — the goal stated at the top
+of this phase — needs a `database V2` writer that doesn't exist yet.
+Full write-up, including why this isn't the same risk as Phase 4's
+live-database gate, in `docs/decisions.md`.
 
 **Generalizes beyond burn-to-flash** (James, 2026-09-08): the diff step
 above already applies equally to the ordinary copy-to-canonical-tree
@@ -207,13 +218,112 @@ Testing:
   references every track, adding a track between burns, a changed track
   overwritten in place rather than renamed aside, source-tree
   immutability, nested crate hierarchies).
-- **Still open**: real hardware test — burn to an actual spare flash
-  drive, and if a second physical Serato rig is available, confirm the
-  drive works there too (blocked on the same missing-USB gap as Phase
-  2's checkpoint).
+- **Done, 2026-09-11**: real hardware test — burned to `D:\TRIAL_BURN`
+  (330/335 copied, 5 traced to pre-existing stale Serato metadata
+  unrelated to this pipeline — see `docs/decisions.md`). Folder
+  structure and track contents confirmed correct by James, by hand, in
+  real Serato, after manually adding the drive so Serato would
+  recognize it — which is exactly what exposed the `database V2` gap
+  below. Second-rig confirmation still open, otherwise done.
 - **Still open**: failure injection — drive unplugged mid-burn, drive
   fills up mid-copy — must fail safely, never leave a half-written crate
   database behind.
+- **Superseded by Phase 3b below**: the `database V2` writer gap found
+  2026-09-11 — see that phase for the actual scope.
+
+## Phase 3b — `database V2` writer (new, scoped 2026-09-11)
+
+**Goal**: a freshly burned drive shows up in Serato on its own — no
+manual "add this folder" step required. This is what actually finishes
+Phase 3's original promise ("plug and play on any Serato rig"); without
+it, `.crate` files reference tracks Serato's own index has never heard
+of and nothing renders (full diagnosis in `docs/decisions.md`,
+2026-09-11 entry).
+
+**Explicitly separate from Phase 4, not a subset of it.** Phase 4 is
+about safely *editing* James's existing, in-daily-use `database V2` —
+real risk to something he depends on every session, hence the mandatory
+backup gate. This phase only ever *creates* a `database V2` from
+nothing, on a blank scratch drive that never had one — closer in kind
+to what Serato itself does the first time it meets new media. The two
+should stay gated at different risk tiers; conflating them would block
+this lower-risk work behind a gate that isn't actually about it.
+
+**Explicitly out of scope for this phase**: writing into a drive that
+*already has* a `database V2` from a previous burn or from prior Serato
+use. That's a merge problem — reconcile what's already there with
+what's new without clobbering anything Serato itself wrote in the
+meantime (extra crates, cue points, play counts) — and it's a
+meaningfully harder and riskier problem than "write one from scratch."
+It's the natural next step after this phase, but it doesn't block it:
+a from-scratch writer already covers the actual `TRIAL_BURN` use case
+(a blank drive) and is where the format-research risk gets retired
+first, in the lowest-risk setting available, same as Phase 2 did for
+crates.
+
+Deliverables, in build order:
+1. **Research**: `database V2` is undocumented the same way the crate
+   format was, but less obscure — reverse-engineering it has already
+   been done by others in the course of building Serato-library import
+   for other DJ software (the same category of source that led to
+   `fragmede/rekordbox-pdb` being a genuine independent oracle for the
+   Rekordbox side, per the 2026-09-10 entry in `docs/decisions.md`).
+   Find that prior art first rather than starting from zero. Then
+   validate directly against a real file already on hand — James's own
+   library backup has one at
+   `E:\LIBRARY BACKUP 9_10_2026\_Serato_\database V2` (~8 MB) — the same
+   "confirm against a real library" step that validated the crate
+   format on 2026-09-01. Specific open questions to resolve before
+   writing any code:
+   - Same outer chunk framing as `.crate` files (4-byte tag + 4-byte
+     big-endian length), or something else at the top level?
+   - What fields are actually *required* for Serato to treat a track as
+     known and show it in a crate — versus fields Serato merely
+     displays (title, artist, BPM, key, etc.) but can regenerate or
+     leave blank without refusing the entry? Minimum viable is likely
+     smaller than the full field set Serato itself writes.
+   - Does `database V2` encode crate membership at all, or is that
+     purely the separate `.crate` files, as assumed? (Current working
+     assumption, per `serato-crate-format.md`, is the latter —
+     confirm rather than continue assuming.)
+   - Per-track analysis data (waveform, cues, beatgrid) — confirmed
+     working assumption is that it lives in the audio file's own ID3
+     GEOB frames, not in `database V2`, which would mean this project's
+     existing `fs.copyFile`-based copy already carries it over for
+     free. Worth confirming explicitly rather than leaving implicit,
+     since it's the kind of assumption that's easy to get quietly wrong.
+   - Any checksum, version counter, or other integrity field Serato
+     checks before trusting the file, the way `vrsn` works in `.crate`
+     files.
+2. **Reader** (`packages/core/src/serato/databaseV2Reader.ts`): prove
+   the format is understood before writing anything — mirrors how
+   `crateDatabaseReader.ts` came before `crateDatabaseWriter.ts`.
+   Validated by parsing James's real `database V2` and cross-checking
+   whatever's extractable against what Serato itself already shows for
+   that library (track count at minimum; more if practical).
+3. **Writer, blank-drive case only** (`databaseV2Writer.ts`): given a
+   `CanonicalTree`, write a `database V2` from nothing — no existing
+   file to merge against. Round-trip tested the same way
+   `crateDatabaseWriter.ts` was: write → read back with the new reader
+   → diff, plus property-based testing for tree-shape coverage, all
+   against scratch/synthetic data only.
+4. **Wire into `burnToFlash.ts`**: alongside the existing
+   `writeCrateDatabase` call, so a burn to a target with no prior
+   `_Serato_` folder produces both — but only for that case (detect an
+   existing `database V2` at the target and refuse/skip rather than
+   guess, until the merge case in a later phase exists).
+5. **Trust gate, same pattern as Phase 2/3**: proven against scratch
+   fixtures and round-trip tests first; the actual hardware checkpoint
+   is burning to a genuinely blank drive and confirming Serato shows
+   the library **without** the manual "add folder" step this phase
+   exists to remove.
+
+Testing: same posture as Phase 2 — unit tests against synthetic trees,
+property-based round-trip testing, nothing near James's real
+`E:\_Serato_` at any point (there's no reason this phase should ever
+touch it; it only writes to drives that don't have a `database V2`
+yet). Real-hardware confirmation is the final step, not a substitute
+for the automated suite.
 
 ## Phase 4 — Opt-in live migration (highest risk, latest, explicitly gated)
 

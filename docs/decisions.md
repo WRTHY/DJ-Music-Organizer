@@ -2,6 +2,88 @@
 
 Lightweight ADR-style log of the choices behind this project. Newest first.
 
+## 2026-09-11 — The Phase 2/3 hardware checkpoint finally happened, and it found the real gap: `.crate` files alone don't make Serato see a library
+
+James plugged `D:\TRIAL_BURN` into a real machine with real Serato
+installed -- the manual checkpoint `docs/roadmap.md` had been calling
+"the actual trust gate" since Phase 2, deliberately left undone until
+real hardware was on hand. The drive read fine and the burned audio
+files and `.crate` files were both present and correct. Serato showed
+nothing. James's own read on it, verbatim: "I feel like we are missing
+content or context that Serato leans on when creating folders/there is
+additional information needed outside of just the crate structure" --
+exactly right, and confirmed directly by comparing `D:\_Serato_`
+(written by this project's `writeCrateDatabase`) against
+`_Serato_` inside the verified library backup (a real, Serato-managed
+folder):
+
+`D:\_Serato_` contains exactly one thing: `Subcrates/*.crate`.
+
+The real `_Serato_` contains that too, but also: **`database V2`** (in
+James's real library, ~8 MB) -- Serato's single master index of every
+track it knows about, including tag data and a pointer used by
+everything else; `neworder.pref` / `collapsed.pref` (crate-tree UI
+state); `Export Backups/` (Serato's own periodic self-backups of the
+above); and a few things belonging to other tools entirely (a
+`Lexicon/` folder, and a `Library/location.sqlite` that's Lexicon's own
+index, not Serato's -- see the memory note from project kickoff about
+reading Lexicon's `location.sqlite` someday).
+
+The `.crate` files this project writes are not a standalone
+description of a library -- they're closer to filtered *views*: an
+ordered list of pointers into tracks Serato already knows about via
+`database V2`. A crate referencing a track `database V2` has never
+heard of doesn't render as "found," because as far as Serato's UI is
+concerned that track doesn't exist yet. This lines up exactly with
+`serato-crate-format.md`'s own account of what was actually validated
+back on 2026-09-01: the container format, `otrk`/`ptrk` chunks, UTF-16BE
+encoding, and the `%%` filename hierarchy -- all real properties of
+`.crate` files specifically. Nobody ever reverse-engineered `database
+V2` alongside it, and nothing in this project's round-trip tests could
+have caught the gap: `crateDatabaseWriter.ts`'s round-trip proof is
+write → read back with *this project's own reader* → diff, which only
+proves internal self-consistency, never "does real Serato agree." That
+ceiling on self-verification was already named explicitly in an earlier
+entry in this log (the Rekordbox independent-oracle write-up) -- this
+is the same ceiling, just hit from the write side instead of the read
+side, and exactly why `docs/roadmap.md` refused to call Phase 3 trusted
+before a real hardware checkpoint happened. It was right to insist on
+that gate; this is what it was for.
+
+**This is a scope gap, not a bug in what's built.** `writeCrateDatabase`
+does precisely what it was designed to do, correctly. What was never
+built is a `database V2` writer -- a second, harder reverse-engineering
+project (it encodes full per-track metadata, not just paths, and is
+undocumented the same way the crate format was) sitting alongside the
+already-solved crate format. `docs/roadmap.md`'s Phase 4 gate ("Serato's
+live database stays untouched... it's the thing someone actually
+depends on") is a **different** risk case and shouldn't be read as
+covering this one: Phase 4 is about safely *editing* James's existing,
+in-use `database V2`, which real risk of corrupting a database Serato
+depends on every day justifies gating hard behind a mandatory backup.
+Writing a **fresh** `database V2` onto a blank scratch drive that never
+had one is a different, lower-risk shape of problem -- closer to what
+Serato itself does the first time it meets a new drive. Conflating the
+two would block low-risk work behind a gate meant for a high-risk one.
+
+**Immediate, practical path (not a code change):** Serato is built to
+onboard folders it doesn't yet recognize -- pointing Serato's own Files
+panel at `D:\` and dragging the burned folders into a crate should let
+Serato do the `database V2` bookkeeping itself, the same as it would
+for any drive of files a DJ found and wants to bring in. That's a real
+option for James to confirm this exact burn is musically correct on
+real hardware today, independent of whether this project ever builds
+an automated `database V2` writer. Worth him double-checking against
+Serato's actual current UI, since that's day-to-day his tool, not this
+project's.
+
+`docs/roadmap.md`'s Phase 3 summary previously read "Phase 3's software
+side is now fully built and verified" -- written before this checkpoint
+existed to test it against. Corrected in this same update: the
+diff/plan/execute/verify pipeline is proven; "Serato recognizes a
+freshly burned drive without manual help" was not, and is now an
+explicit open item rather than an implied one.
+
 ## 2026-09-11 — TRIAL_BURN's 100% copy-failure root cause, and why it isn't in diff.ts or executor.ts
 
 James's first two real burn-to-flash attempts against a physical drive
@@ -88,6 +170,35 @@ feeds both `diffBurn` and `burn`) are not redundant -- they're
 different destinations for two different flows, and confirmed today
 that `diffBurn` and `burn` both read from the same `burnTarget` state,
 so there's no stale-preview-vs-live-burn mismatch between them either.
+
+**Postscript, same day -- confirmed on the retry.** After the volume
+root correction, a real burn of the previously-failing selection
+copied 330/335 tracks; the remaining 5 all failed with the same
+signature (ENOENT), all under `Unsorted New Music`, and all resolving
+through `E:\LIBRARY BACKUP 9_10_2026\...` rather than a plain
+`E:\...` path. That specific detail -- a backup-folder segment baked
+into the *stored* crate path itself -- pointed at two different
+explanations (a still-wrong Volume root vs. genuinely stale Serato
+metadata), and James confirmed it's the latter, firsthand: he'd added
+those specific tracks to a crate while they lived at that path, then
+moved them afterward without Serato's crate following along. Nothing
+to fix in this project for that case -- it's Serato's own crate data
+being stale, the same class of drift as the smaller 65-track residual
+seen earlier in this same investigation, just concrete enough this
+time to trace to a specific cause. Today's actual code fix (Volume
+root was genuinely wrong before the first retry) is what took the
+failure rate from 335/335 down to 5/335; this last 5 is unrelated
+pre-existing drift in Serato's own data, not a remaining bug here.
+
+Net effect: the `D:\TRIAL_BURN` write/verify path (diff -> plan ->
+execute -> writeCrateDatabase -> verify) is now demonstrated working
+end-to-end against a real physical drive, with a real, non-trivial
+selection, for the first time this project. What's still outstanding
+from docs/roadmap.md's Phase 2/3 checkpoints is the manual half: open
+that drive in actual Serato and confirm by eye that the crates and
+tracks look right -- this burn hasn't been eyeballed in the real
+application yet, only verified programmatically against the format
+spec this project itself wrote.
 
 ## 2026-09-10 — Independent-oracle cross-check of the Rekordbox reader: exact match, plus a corrected row-count safety finding
 
