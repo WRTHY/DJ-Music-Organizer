@@ -2,6 +2,93 @@
 
 Lightweight ADR-style log of the choices behind this project. Newest first.
 
+## 2026-09-11 — TRIAL_BURN's 100% copy-failure root cause, and why it isn't in diff.ts or executor.ts
+
+James's first two real burn-to-flash attempts against a physical drive
+(`D:\TRIAL_BURN`) both failed -- attempt 1: "335 unresolved, 0 missing, 0
+unexpected" at verify; attempt 2, after some tree/selection changes:
+"335 new · 0 changed · 0 already up to date" at diff, then "error: 335"
+at execution (100% of copy attempts failed), then "14009 unresolved,
+0 missing, 9430 unexpected" at verify. A manual copy of one track onto
+the same (reformatted) drive afterward succeeded, and Explorer showed
+the drive at full free space -- ruling out disk-full, drive corruption,
+and OS permissions as the cause.
+
+James's own hypothesis, stated directly: "I still think we are not
+correctly doing the copy step, or there is an assumption that the files
+already exist." That's exactly the right place to start, so both
+candidate spots were re-read with that specific question in mind:
+
+**`organizer/diff.ts`'s `classify()`** -- decides `new`/`changed`/
+`unchanged` per track, and `planFromDiff` drops anything `unchanged`
+from the plan. If this wrongly treated a destination file as already
+present, the copy would be silently skipped -- exactly James's
+hypothesis. But `classify()` calls `pathExists()`, a live `fs.access()`
+against the real filesystem, not a cache, before it ever looks at a
+hash. And attempt 2's own diff summary -- "335 new · 0 changed · 0
+already up to date" -- is the smoking gun that clears it empirically,
+not just by code reading: every single track was correctly classified
+`new`. Nothing was wrongly treated as already existing on that run.
+
+**`organizer/executor.ts`'s `resolveCollision()`** -- same shape, same
+verdict: `pathExists(targetPath)` is a live check; it only trusts a
+hash-match short-circuit when a real file is actually there. Also not
+the bug.
+
+So the "assumption that files exist" isn't in either step's *logic* --
+both correctly saw nothing at the target. The actual failure has to be
+in what `executeItem` did next: `mkdir` on the target succeeded (James
+confirmed folders were created correctly), so the target-side plumbing
+(`burnTarget` -> `targetRoot` -> `item.targetPath`) is fine. That
+leaves `fs.copyFile(item.sourcePath, finalTargetPath)` failing for
+literally all 335 items, which points at `sourcePath` instead --
+computed by `readCrateDatabase` as `path.resolve(volumeRoot, rawPath)`
+(`crateDatabaseReader.ts`). "Volume root" is a separate UI field from
+both `targetRoot` and `burnTarget` (confirmed not redundant with either
+-- see the field-audit note below), typed once and never re-validated
+against the drive that's actually plugged in right now. This project
+already has a documented history this session of `E:\` and `F:\`
+swapping identities on Windows; as of this writing, `_Serato_` is
+confirmed live on `E:\`, and `F:\` currently holds `PIONEER` (a
+different drive) instead. A `Volume root` field still holding an
+earlier value would resolve every track to a nonexistent path under
+the wrong drive -- a uniform, 100%-failure-rate ENOENT on every
+`fs.copyFile` call, matching what was observed exactly. This is
+consistent with, and sharpens, an earlier working note in this log
+about drive-letter instability -- not a new problem, but its first
+concrete real-world hit against a burn.
+
+Crucially, this was never confirmed by direct evidence -- the UI never
+showed *why* the 335 copies failed, only that they did. That gap is
+the actual fix shipped today, not a change to diff/executor logic
+(which check out correctly): `App.tsx` now surfaces `unresolvedCount`
+(already computed by `readCrateDatabase`, silently unused until now)
+as a warning right on the Scan result card, before any burn is
+attempted, and both the plain execution report and the burn report now
+show a sample of each failed item's real captured error message
+(`OrganizeItemResult.error`, always populated by `executeItem`'s
+catch block but never rendered) instead of just a bare count. The next
+retry will show, directly, whether this is in fact a stale volume root
+(an ENOENT on a path under the wrong drive) or something else entirely
+-- turning a multi-message guessing game into one look at the screen.
+
+Caught during verification (scratch `tsc` build against the real
+`@mlo/core`, same approach as the `SeratoSourceType` fix): the first
+draft used `'unresolvedCount' in result` to narrow a generic `run<T>`
+callback's result, which TypeScript can't do -- narrowing a bare type
+parameter via `in` types the property `unknown` rather than its real
+type. Fixed by branching on `scanMode` instead (the same condition
+that picked which scan ran in the first place), which is both correct
+and clearer than the runtime check it replaced.
+
+**Field-audit note, answering James's earlier "is this redundant"
+question about the two target-path fields:** `targetRoot` (top form,
+feeds `planOrganize`/the copy flow) and `burnTarget` (bottom form,
+feeds both `diffBurn` and `burn`) are not redundant -- they're
+different destinations for two different flows, and confirmed today
+that `diffBurn` and `burn` both read from the same `burnTarget` state,
+so there's no stale-preview-vs-live-burn mismatch between them either.
+
 ## 2026-09-10 — Independent-oracle cross-check of the Rekordbox reader: exact match, plus a corrected row-count safety finding
 
 James asked directly: "take a look at pyrekordbox and this repo and cross

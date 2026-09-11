@@ -64,6 +64,46 @@ function topLevelKeys(root: CanonicalTree['root']): Set<string> {
   return new Set(root.children.map((child) => child.path.join('/')));
 }
 
+const MAX_SHOWN_FAILURES = 8;
+
+// Both the plain copy flow's execution report and the burn flow's report
+// wrap the same OrganizeReport shape, and both were only ever showing the
+// per-status *counts* (e.g. "error: 335") with no way to see WHY any of
+// those errors happened short of re-running with a debugger attached.
+// executeItem (organizer/executor.ts) already captures a real
+// `(err as Error).message` per failed item -- e.g. Node's own
+// "ENOENT: no such file or directory, open '...'" -- so surface a sample
+// of that here instead of leaving it on the floor. Capped rather than
+// listing all of them: a uniform failure (like every item hitting the same
+// missing-volume-root problem) produces one failure per track, and nobody
+// needs to read the same explanation 335 times to understand it.
+function FailedItems({ results }: { results: OrganizeReport['results'] }) {
+  const failed = results.filter((r) => r.status === 'error');
+  if (failed.length === 0) return null;
+
+  const shown = failed.slice(0, MAX_SHOWN_FAILURES);
+  const remaining = failed.length - shown.length;
+
+  return (
+    <div>
+      <p role="alert" className={styles.error}>
+        {failed.length} file(s) failed. Showing {shown.length} of them below — look for whether
+        they all share the same reason (e.g. every path pointing at a drive that isn't the right
+        one right now) rather than treating each as a separate problem.
+      </p>
+      <ul className={styles.reportList}>
+        {shown.map((r) => (
+          <li key={r.trackId}>
+            <code>{r.sourcePath}</code>
+            <br />→ {r.error ?? '(no error message captured)'}
+          </li>
+        ))}
+      </ul>
+      {remaining > 0 && <p className={styles.subtitle}>…and {remaining} more with the same status.</p>}
+    </div>
+  );
+}
+
 export default function App() {
   const [scanMode, setScanMode] = useState<ScanMode>('crates');
 
@@ -77,6 +117,16 @@ export default function App() {
   const [mode] = useState<'copy' | 'move'>('copy'); // move is a follow-up, see docs/decisions.md
 
   const [tree, setTree] = useState<CanonicalTree | null>(null);
+  // Only set for a crate-database scan (scanCrateDatabase's return type is
+  // CanonicalTree & { unresolvedCount } -- folder-tree scans have no such
+  // concept, there's no path resolution to fail). Surfaced right here at
+  // scan time, not just buried in a burn's verification step afterward --
+  // a wrong "Volume root" (e.g. a stale drive letter left over from before
+  // a drive got reassigned -- this happens, drive letters aren't stable)
+  // would otherwise resolve every track path to a file that doesn't exist,
+  // and nothing would say so until a burn failed for what looks like an
+  // unrelated reason much later.
+  const [unresolvedCount, setUnresolvedCount] = useState<number | null>(null);
   const [excludedKeys, setExcludedKeys] = useState<Set<string>>(new Set());
   const [plan, setPlan] = useState<OrganizePlan | null>(null);
   const [report, setReport] = useState<OrganizeReport | null>(null);
@@ -132,6 +182,14 @@ export default function App() {
       () => (scanMode === 'folders' ? scanFolderTree(rootPath) : scanCrateDatabase(subcratesDir, volumeRoot)),
       (result) => {
         setTree(result);
+        // Branching on scanMode (rather than a runtime `in` check on `result`)
+        // because TS can't narrow a generic `run<T>` result via `in` -- it
+        // still types the property as `unknown` afterward. scanMode is
+        // exactly the condition that decided which of scanFolderTree /
+        // scanCrateDatabase ran, so it's both correct and clearer here.
+        setUnresolvedCount(
+          scanMode === 'crates' ? (result as CanonicalTree & { unresolvedCount: number }).unresolvedCount : null
+        );
         setExcludedKeys(new Set());
         setPlan(null);
         setReport(null);
@@ -303,6 +361,17 @@ export default function App() {
               ? `${trackCount} track(s) found`
               : `${selectedCount} of ${trackCount} track(s) selected`}
           </p>
+          {unresolvedCount !== null && unresolvedCount > 0 && (
+            <p role="alert" className={styles.error}>
+              {unresolvedCount} of {trackCount} track path(s) didn't resolve to a real file on disk
+              just now. This almost always means "Volume root" above is wrong for this drive right
+              now — most often a drive letter that held this library earlier and has since been
+              reassigned to something else. Fix "Volume root" and scan again before copying or
+              burning anything: a burn will still "succeed" at writing a crate database even when
+              the tracks it references don't actually exist at the destination, and the failure
+              won't be obvious until verification (or opening the drive in Serato) much later.
+            </p>
+          )}
           <p className={styles.subtitle}>
             Uncheck a crate or folder to leave it out of the copy — unchecking a parent leaves out
             everything inside it too. Use the buttons below to start from either end instead of
@@ -358,6 +427,7 @@ export default function App() {
               </li>
             ))}
           </ul>
+          <FailedItems results={report.results} />
         </Card>
       )}
 
@@ -425,6 +495,7 @@ export default function App() {
                   </li>
                 ))}
               </ul>
+              <FailedItems results={burnReport.organizeReport.results} />
             </>
           )}
         </Card>
