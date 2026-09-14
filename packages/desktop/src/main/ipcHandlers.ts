@@ -1,5 +1,7 @@
+import fs from 'node:fs/promises';
 import {
   type CanonicalTree,
+  type DatabaseV2Source,
   JsonTrackIndexStore,
   burnToFlash,
   detectSourceType,
@@ -12,12 +14,14 @@ import {
   summarizeDiff,
   type ScanProgressCallback,
 } from '@mlo/core';
-import type {
-  BurnArgs,
-  DetectSeratoSourceResult,
-  ExecuteOrganizeArgs,
-  PlanOrganizeArgs,
-  ScanCrateDatabaseArgs,
+import {
+  DEFAULT_SOURCE_DATABASE_V2,
+  type BurnArgs,
+  type BurnExecuteArgs,
+  type DetectSeratoSourceResult,
+  type ExecuteOrganizeArgs,
+  type PlanOrganizeArgs,
+  type ScanCrateDatabaseArgs,
 } from '../shared/ipcContract';
 
 /**
@@ -103,17 +107,71 @@ export async function diffBurn(args: BurnArgs, storePath: string) {
 }
 
 /**
+ * Resolves what `sourceDatabaseV2` a real burn should actually use
+ * (Phase 3b UI wiring, docs/decisions.md 2026-09-14). Two different
+ * trust levels on purpose:
+ *
+ * - An explicit value from the caller is passed through completely
+ *   unchecked -- if it points at a file that doesn't exist, `burnToFlash`
+ *   throws and the burn fails loudly. That's deliberate: an explicit
+ *   path is a deliberate choice, and this project's whole posture is
+ *   "fail loudly on a bad explicit input" (path-safety checks, the
+ *   `database V2`-already-exists refusal, etc.) rather than silently
+ *   doing something else instead.
+ * - The default is a convenience, not a deliberate per-burn choice -- so
+ *   it's only ever applied when that file actually exists. A burn on a
+ *   machine without that exact backup path (a fresh checkout, this
+ *   project's own test suite, or James's backup folder someday getting
+ *   renamed/moved) should still complete normally with the ordinary
+ *   minimal synthesis, never hard-fail just because a convenience
+ *   default wasn't there.
+ *
+ * `defaultSource` is a parameter rather than reading
+ * `DEFAULT_SOURCE_DATABASE_V2` directly here for the same reason
+ * `storePath` is a parameter on `diffBurn`/`burn` rather than this file
+ * computing it itself: it's real, environment-specific state (a real
+ * path on James's actual machine), and hardcoding it into this function
+ * would make its behavior depend on whatever machine happens to run the
+ * test suite -- exactly the bug an earlier version of this test caught
+ * for real (see `__tests__/ipcHandlers.test.ts`: it passed in this
+ * session's Linux sandbox, where no `E:\` drive exists, and failed on
+ * James's own machine, where the real backup does).
+ */
+async function resolveSourceDatabaseV2(
+  explicit: DatabaseV2Source | undefined,
+  defaultSource: DatabaseV2Source
+): Promise<DatabaseV2Source | undefined> {
+  if (explicit) return explicit;
+  const defaultExists = await fs
+    .access(defaultSource.filePath)
+    .then(() => true)
+    .catch(() => false);
+  return defaultExists ? defaultSource : undefined;
+}
+
+/**
  * The real burn: copies whatever's new/changed onto `args.targetRoot`,
  * regenerates the full crate database there, and verifies the result by
  * reading it back. See @mlo/core's serato/burnToFlash.ts for the full
  * design -- this is a thin pass-through, same shape as every other
- * handler in this file.
+ * handler in this file, plus the sourceDatabaseV2 default-resolution
+ * above.
+ *
+ * `defaultSourceDatabaseV2` defaults to the real
+ * `DEFAULT_SOURCE_DATABASE_V2` constant so `registerIpc.ts` doesn't need
+ * to pass anything -- but, like `storePath`, it's still a real parameter
+ * a test can override with a controlled path instead of the real one.
  */
-export async function burn(args: BurnArgs, storePath: string) {
+export async function burn(
+  args: BurnExecuteArgs,
+  storePath: string,
+  defaultSourceDatabaseV2: DatabaseV2Source = DEFAULT_SOURCE_DATABASE_V2
+) {
   const store = new JsonTrackIndexStore(storePath);
   await store.load();
   const tree = applySelection(args.tree, args.excludedKeys);
-  const report = await burnToFlash(tree, args.targetRoot, { store, mode: args.mode ?? 'copy' });
+  const sourceDatabaseV2 = await resolveSourceDatabaseV2(args.sourceDatabaseV2, defaultSourceDatabaseV2);
+  const report = await burnToFlash(tree, args.targetRoot, { store, mode: args.mode ?? 'copy', sourceDatabaseV2 });
   await store.save();
   return report;
 }

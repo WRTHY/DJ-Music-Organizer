@@ -2,6 +2,7 @@ import type {
   BurnReport,
   CanonicalNode,
   CanonicalTree,
+  DatabaseV2Source,
   DiffSummary,
   OrganizeMode,
   OrganizePlan,
@@ -19,6 +20,7 @@ export type {
   BurnReport,
   CanonicalNode,
   CanonicalTree,
+  DatabaseV2Source,
   DiffSummary,
   OrganizeMode,
   OrganizePlan,
@@ -113,6 +115,46 @@ export interface BurnArgs {
   excludedKeys?: string[];
 }
 
+/**
+ * `burn`-only extension of `BurnArgs` (Phase 3b, docs/roadmap.md): adds
+ * the optional already-analyzed `database V2` to carry per-track
+ * analysis state forward from (see `DatabaseV2Source`'s doc in
+ * `@mlo/core`'s burnToFlash.ts). Deliberately NOT added to `BurnArgs`
+ * itself -- `diffBurn` is a read-only preview that never touches
+ * `database V2` at all (see the diffBurn channel comment above), so
+ * giving it a field it would silently ignore is exactly the kind of
+ * drift this shared-contract file exists to prevent.
+ */
+export interface BurnExecuteArgs extends BurnArgs {
+  /**
+   * Omit to let main/ipcHandlers.ts apply its own default (currently
+   * James's library backup, see `DEFAULT_SOURCE_DATABASE_V2` below) --
+   * applied only when that default file actually exists, never forced.
+   * Pass explicitly to override it; an explicit path that doesn't exist
+   * fails the burn loudly rather than silently falling back -- see
+   * `BurnOptions.sourceDatabaseV2`'s doc in `@mlo/core`.
+   */
+  sourceDatabaseV2?: DatabaseV2Source;
+}
+
+/**
+ * The already-analyzed `database V2` a real burn reads from by default
+ * when the caller doesn't specify one -- James's library backup, not his
+ * live `E:\_Serato_\database V2`, so this feature can never read (let
+ * alone write) the one database he actually uses every session (Phase
+ * 3b UI wiring decision, docs/decisions.md 2026-09-14). A plain shared
+ * constant rather than something computed independently in main and
+ * renderer code: main/ipcHandlers.ts applies it as the fallback when
+ * `sourceDatabaseV2` is omitted (after confirming the file is actually
+ * there -- see that file), and the renderer displays this exact value
+ * read-only on the "Burn to flash" card, so there's exactly one place to
+ * update if this path ever needs to change, not two that could drift.
+ */
+export const DEFAULT_SOURCE_DATABASE_V2: DatabaseV2Source = {
+  filePath: String.raw`E:\LIBRARY BACKUP 9_10_2026\_Serato_\database V2`,
+  volumeRoot: String.raw`E:\LIBRARY BACKUP 9_10_2026`,
+};
+
 /** The API surface the preload script exposes on `window.mlo`. */
 export interface MloApi {
   selectFolder(): Promise<string | null>;
@@ -131,5 +173,5 @@ export interface MloApi {
   /** Read-only preview: counts what's new/unchanged/changed without writing anything to targetRoot. */
   diffBurn(args: BurnArgs): Promise<DiffSummary>;
   /** The real burn -- copies what's new/changed, then regenerates the full crate database and verifies it. */
-  burn(args: BurnArgs): Promise<BurnReport>;
+  burn(args: BurnExecuteArgs): Promise<BurnReport>;
 }
