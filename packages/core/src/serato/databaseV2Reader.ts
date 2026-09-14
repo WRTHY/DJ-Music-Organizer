@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import path from 'node:path';
 
 /**
  * Reader for Serato's `database V2` format -- the master track index
@@ -161,4 +162,85 @@ export function parseDatabaseV2Buffer(buffer: Buffer): ParsedDatabaseV2 {
 export async function readDatabaseV2(filePath: string): Promise<ParsedDatabaseV2> {
   const buffer = await fs.readFile(filePath);
   return parseDatabaseV2Buffer(buffer);
+}
+
+/**
+ * Extracts only a track chunk's `pfil` value, without decoding anything
+ * else -- the minimum needed to key a raw record by path. Separate from
+ * `parseTrackChunk` deliberately: that function decodes the *named*
+ * fields this project understands and discards the rest, which is
+ * exactly what `parseRawDatabaseV2Records` below must NOT do.
+ */
+function extractRawPfil(payload: Buffer): string | null {
+  let offset = 0;
+  while (offset + 8 <= payload.length) {
+    const tag = payload.toString('ascii', offset, offset + 4);
+    const len = payload.readUInt32BE(offset + 4);
+    const fieldStart = offset + 8;
+    const fieldEnd = fieldStart + len;
+    if (len < 0 || fieldEnd > payload.length) break;
+    if (tag === 'pfil') {
+      return decodeUtf16BE(payload.subarray(fieldStart, fieldEnd));
+    }
+    offset = fieldEnd;
+  }
+  return null;
+}
+
+/**
+ * Parses a `database V2` buffer into raw, UNDECODED `otrk` payloads,
+ * keyed by each track's resolved absolute path -- the counterpart to
+ * `parseDatabaseV2Buffer`, which decodes only the ~10 fields this
+ * project has names for and silently drops the other ~25 (see
+ * docs/serato-database-v2-format.md's field table). This exists
+ * specifically so `databaseV2Writer.ts` can carry a track's *entire*
+ * original record forward into a freshly-written database V2 instead of
+ * synthesizing a minimal one -- see that module's doc and
+ * docs/decisions.md's 2026-09-14 entry for why: this project doesn't
+ * know which of those ~25 undecoded fields Serato actually relies on to
+ * treat a track as already-analyzed, so the safe move is preserving all
+ * of them byte-for-byte rather than guessing at one.
+ *
+ * A malformed or missing `pfil` on a given record (not observed on any
+ * real file so far) means that record is skipped rather than stored
+ * under a bogus key -- there would be nothing correct to resolve it
+ * against anyway.
+ */
+export function parseRawDatabaseV2Records(buffer: Buffer, volumeRoot: string): Map<string, Buffer> {
+  const records = new Map<string, Buffer>();
+  let offset = 0;
+
+  while (offset + 8 <= buffer.length) {
+    const tag = buffer.toString('ascii', offset, offset + 4);
+    const len = buffer.readUInt32BE(offset + 4);
+    const payloadStart = offset + 8;
+    const payloadEnd = payloadStart + len;
+    if (len < 0 || payloadEnd > buffer.length) break;
+
+    if (tag === 'otrk') {
+      const payload = buffer.subarray(payloadStart, payloadEnd);
+      const rawPath = extractRawPfil(payload);
+      if (rawPath !== null) {
+        const absolutePath = path.resolve(volumeRoot, rawPath);
+        // Copy out of the source buffer rather than keeping a subarray
+        // view into it, so the original buffer can be garbage collected
+        // independently of however long these records are held onto.
+        records.set(absolutePath, Buffer.from(payload));
+      }
+    }
+
+    offset = payloadEnd;
+  }
+
+  return records;
+}
+
+/**
+ * Reads a `database V2` file and returns its raw per-track records,
+ * keyed by resolved absolute path -- see `parseRawDatabaseV2Records`.
+ * Read-only; never modifies the file.
+ */
+export async function readRawDatabaseV2Records(filePath: string, volumeRoot: string): Promise<Map<string, Buffer>> {
+  const buffer = await fs.readFile(filePath);
+  return parseRawDatabaseV2Records(buffer, volumeRoot);
 }

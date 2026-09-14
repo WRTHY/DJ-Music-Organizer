@@ -2,6 +2,107 @@
 
 Lightweight ADR-style log of the choices behind this project. Newest first.
 
+## 2026-09-14 — Phase 3b Deliverable 5 hardware result + the re-analysis regression it surfaced, and the fix
+
+**The hardware checkpoint itself passed.** A drive burned blank via the
+2026-09-12 writer showed its full folder/crate structure correctly on a
+second machine's real Serato, no manual "add folder" step — confirming
+the minimal `pfil`+`ttyp` field set is genuinely sufficient for
+*visibility*, exactly the hypothesis it existed to test.
+
+**But the same test surfaced a real regression the roadmap hadn't
+anticipated**: Serato wanted to re-analyze all ~15,000 tracks on the
+burned drive, which James experienced as metadata being "wiped out" in
+the copy. Diagnosed rather than guessed at:
+
+- Ruled out the file-copy step itself first, since it's the most
+  suspicious-looking code (`fs.copyFile` in `organizer/executor.ts`): a
+  direct Python `shutil.copyfile` + `mutagen.ID3` test against one of
+  James's real mp3s proved every Serato `GEOB` ID3 frame
+  (`Serato Overview`, `Analysis`, `Autotags`, `Markers_`, `Markers2`,
+  `BeatGrid`, `Offsets_`) survives a raw copy byte-for-byte, and the
+  whole file is byte-identical afterward. Copying is not the cause.
+- Web research (a Serato migrator tool's README, two Serato forum
+  threads) found independent, if informal, corroboration that
+  re-analysis is tied to `database V2`'s own completeness, not solely to
+  the audio files' embedded tags.
+- **Direct proof, found on James's own re-tested trial-burn drive**: its
+  `_Serato_` folder now contains a `DBV2-legacy.zip` Serato wrote
+  automatically, containing a `database V2` that is a byte-for-byte match
+  of exactly what this project's writer produced — 332 tracks, `pfil` +
+  `ttyp` only, nothing else. Serato backed that file up, then rewrote its
+  own `database V2` (106,192 bytes vs. the original 45,516) after
+  rescanning, adding **17 more fields present on every single one of the
+  332 rescanned tracks**: `tadd`, `uadd`, `utme`, `utpc`, `bhrt`, `bmis`,
+  `bply`, `blop`, `bitu`, `bovc`, `bcrt`, `biro`, `bwlb`, `bwll`, `buns`,
+  `bbgl`, `bkrk`. (Song metadata like `tsng`/`tart` was only present on 2
+  of 332 tracks — irrelevant to the re-analysis question, but notable.)
+  This is about as close to a smoking gun as this project gets without
+  Serato's own source: the minimal writer is confirmed as the actual
+  cause.
+
+**Fix: carry the original record forward instead of guessing which of
+those 17 fields matter.** Rather than reverse-engineer which flags gate
+"already analyzed" (most are still unidentified — see
+docs/serato-database-v2-format.md), a track with a prior analyzed record
+somewhere gets that record's *entire* original byte content reproduced
+verbatim, with only `pfil` rewritten to the new destination path:
+
+- `databaseV2Reader.ts` gained `parseRawDatabaseV2Records` /
+  `readRawDatabaseV2Records` — a second, deliberately separate read path
+  from the existing named-field parser. The named parser only decodes
+  the ~10 fields this project has names for and silently drops the rest;
+  the raw path keeps every field, keyed by each track's resolved
+  absolute path, specifically so nothing has to be understood to be
+  preserved.
+- `databaseV2Writer.ts` gained `DatabaseV2WriteOptions.sourceRecords` (a
+  `Map<absolutePath, Buffer>`) and `replacePfilInRawPayload`, which
+  re-emits a raw record's sub-chunks in original order, swapping only
+  `pfil`. A track with a matching source record uses this; a track with
+  none (genuinely new material) still falls back to the original minimal
+  synthesis — there's nothing to carry forward for it, and Serato has to
+  analyze it at least once regardless. `DatabaseV2WriteResult` gained
+  `preservedCount` so a caller (or James) can see at a glance how much of
+  a burn is expected to avoid re-analysis.
+- `burnToFlash.ts` gained `BurnOptions.sourceDatabaseV2` (`{ filePath,
+  volumeRoot }`, pointing at an already-analyzed `database V2` to read
+  from — read-only, never modified) and a `buildSourceRecordsByDestinationPath`
+  helper to wire it through.
+
+**A real bug the scratch harness caught before it reached the real
+repo**: the first implementation looked up `sourceRecords` by each
+destination-tree track's own `sourcePath` — but `organizer/diff.ts`'s
+`treeAtDestination` already rewrites every track's `sourcePath` (and
+`id`) to the *destination* path by the time `writeDatabaseV2` sees it, so
+that lookup always missed (`preservedCount` came back `0` in a test that
+expected `1`). Fixed by using `diff.items` — which still carries each
+track's original *source-library* path alongside its `targetPath`,
+computed before any remapping — as the bridge: re-key the source
+records from source-library path to destination path before handing them
+to the writer. Worth recording because it's a shape of bug (a lookup key
+computed against one tree while the map is built from another) that's
+easy to reintroduce anywhere else this project reads `t.sourcePath` off
+`destinationTree`.
+
+Testing: `databaseV2Reader.test.ts` gained 4 cases for the raw-record
+reader (byte-for-byte preservation of unmapped fields, no-`pfil` skip,
+copy-not-view semantics, real read-only file read).
+`databaseV2Writer.test.ts` gained 3 cases under the carry-forward
+fix (byte-for-byte preservation except `pfil`, correct fallback with no
+match, and behavior unchanged when the option is omitted entirely).
+`burnToFlash.test.ts` gained 2 cases for the `sourceDatabaseV2` wiring
+(including the one that caught the bug above). Also smoke-tested
+`readRawDatabaseV2Records` directly against James's real, live 11,991-track
+`database V2`: correctly returned exactly 11,991 records, matching the
+already-trusted named-field reader's count, with no errors.
+
+**Open, unresolved as of this entry**: which file should actually be
+passed as `sourceDatabaseV2` for a real burn — James's live
+`E:\_Serato_\database V2`, or the backup copy under
+`E:\LIBRARY BACKUP 9_10_2026\_Serato_`? This is a real design/UX question,
+not yet answered; for now this is a core-only capability (no desktop UI
+wiring — that's Phase 3b UI work, not started).
+
 ## 2026-09-12 — Phase 3b Deliverables 3-4: `database V2` writer built and wired into `burnToFlash.ts`, blank-drive case only
 
 Followed the reader (2026-09-11 entry below) with its inverse, same

@@ -4,6 +4,7 @@ import { CanonicalTree, allTracks } from '../types';
 import { TrackIndexStore } from '../trackIndex';
 import {
   DiffSummary,
+  OrganizeDiff,
   OrganizeMode,
   OrganizeReport,
   diffAgainstDestination,
@@ -15,11 +16,33 @@ import {
 import { readCrateDatabase } from './crateDatabaseReader';
 import { CrateWriteResult, writeCrateDatabase } from './crateDatabaseWriter';
 import { DATABASE_V2_FILENAME, DatabaseV2WriteResult, writeDatabaseV2 } from './databaseV2Writer';
+import { readRawDatabaseV2Records } from './databaseV2Reader';
 
 export interface BurnOptions {
   store: TrackIndexStore;
   /** Defaults to 'copy' -- burning duplicates the library onto a target volume, it doesn't relocate the source. */
   mode?: OrganizeMode;
+  /**
+   * An already-analyzed `database V2` to carry per-track analysis-state
+   * records forward from, so a fresh blank-drive burn doesn't force
+   * Serato to re-analyze every track from scratch -- see
+   * `DatabaseV2WriteOptions.sourceRecords`'s doc for the hardware
+   * evidence behind why this matters (docs/decisions.md, 2026-09-14).
+   *
+   * Optional and deliberately explicit rather than inferred: this
+   * project has observed at least two candidate files on James's own
+   * machine (the live `E:\_Serato_\database V2` and the backup copy
+   * under `E:\LIBRARY BACKUP 9_10_2026\_Serato_`), and guessing which one
+   * is "the" source risks silently reading a stale one. When omitted,
+   * `burnToFlash` falls back to the minimal `pfil`+`ttyp` synthesis for
+   * every track, exactly as before this option existed.
+   */
+  sourceDatabaseV2?: {
+    /** Path to the source `database V2` file. Read-only -- never modified. */
+    filePath: string;
+    /** volumeRoot the source file's own `pfil` paths resolve against (i.e. the parent of ITS `_Serato_`, not necessarily the burn destination's). */
+    volumeRoot: string;
+  };
 }
 
 export interface BurnVerification {
@@ -182,7 +205,10 @@ export async function burnToFlash(
     volumeRoot: resolvedVolumeRoot,
   });
 
-  const databaseV2 = await writeDatabaseV2IfBlank(destinationTree, seratoDir, resolvedVolumeRoot);
+  const sourceRecords = options.sourceDatabaseV2
+    ? await buildSourceRecordsByDestinationPath(options.sourceDatabaseV2, diff)
+    : undefined;
+  const databaseV2 = await writeDatabaseV2IfBlank(destinationTree, seratoDir, resolvedVolumeRoot, sourceRecords);
 
   const verification = await verifyBurn(destinationTree, subcratesDir, resolvedVolumeRoot);
 
@@ -206,10 +232,50 @@ export async function burnToFlash(
  * `DatabaseV2BurnOutcome`'s doc comment for why this stays out of
  * `BurnVerification`'s `ok` flag.
  */
+/**
+ * Re-keys the source database's raw records (keyed by resolved absolute
+ * path on the SOURCE library -- see `readRawDatabaseV2Records`) into a
+ * map keyed by resolved absolute path on the BURN DESTINATION instead --
+ * which is what `writeDatabaseV2`'s own lookup needs, since it's given
+ * `destinationTree`, whose tracks' `sourcePath` has already been remapped
+ * to point at the destination (see `treeAtDestination` in
+ * organizer/diff.ts: every track's `sourcePath`/`id` there is recomputed
+ * from its `targetPath`, not the original source library path).
+ *
+ * `diff.items` is the bridge: each item still carries both the original
+ * `sourcePath` (what a `sourceRecords` entry is keyed by) and the
+ * `targetPath` (what `destinationTree`'s corresponding track's
+ * `sourcePath` will equal) for the same track, computed from the
+ * original `tree` before any remapping happened. A track whose original
+ * path has no matching source record (never analyzed anywhere, or not
+ * covered by `sourceDatabaseV2`) is simply absent from the result --
+ * `writeDatabaseV2` already falls back to its minimal synthesis for any
+ * track it can't find here.
+ */
+async function buildSourceRecordsByDestinationPath(
+  sourceDatabaseV2: NonNullable<BurnOptions['sourceDatabaseV2']>,
+  diff: OrganizeDiff
+): Promise<Map<string, Buffer>> {
+  const recordsBySourcePath = await readRawDatabaseV2Records(
+    sourceDatabaseV2.filePath,
+    path.resolve(sourceDatabaseV2.volumeRoot)
+  );
+
+  const recordsByDestinationPath = new Map<string, Buffer>();
+  for (const item of diff.items) {
+    const record = recordsBySourcePath.get(path.resolve(item.sourcePath));
+    if (record) {
+      recordsByDestinationPath.set(path.resolve(item.targetPath), record);
+    }
+  }
+  return recordsByDestinationPath;
+}
+
 async function writeDatabaseV2IfBlank(
   tree: CanonicalTree,
   seratoDir: string,
-  volumeRoot: string
+  volumeRoot: string,
+  sourceRecords?: Map<string, Buffer>
 ): Promise<DatabaseV2BurnOutcome> {
   const filePath = path.join(seratoDir, DATABASE_V2_FILENAME);
   const alreadyExists = await fs
@@ -220,7 +286,7 @@ async function writeDatabaseV2IfBlank(
     return { written: false, reason: 'already-exists' };
   }
 
-  const result = await writeDatabaseV2(tree, seratoDir, { volumeRoot });
+  const result = await writeDatabaseV2(tree, seratoDir, { volumeRoot, sourceRecords });
   return { written: true, ...result };
 }
 

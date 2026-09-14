@@ -49,6 +49,35 @@ export interface DatabaseV2WriteOptions {
    * can't resolve.
    */
   volumeRoot: string;
+  /**
+   * Optional raw per-track records (keyed by resolved absolute source
+   * path -- see `databaseV2Reader.ts`'s `parseRawDatabaseV2Records` /
+   * `readRawDatabaseV2Records`) carried forward from an already-analyzed
+   * `database V2`, e.g. the live library's own file. When a track being
+   * written has a matching record here, its ENTIRE original field set is
+   * reproduced byte-for-byte (only `pfil` is rewritten, to the new
+   * destination-relative path) instead of the minimal `pfil`+`ttyp`
+   * synthesis below.
+   *
+   * This exists because the minimal field set, while sufficient for a
+   * track to simply show up in Serato (confirmed by Phase 3b's hardware
+   * checkpoint), is NOT sufficient to stop Serato re-analyzing it: a real
+   * hardware burn using only `pfil`+`ttyp` caused Serato to silently back
+   * up that minimal file to `DBV2-legacy.zip` and rewrite its own, adding
+   * 17 fields (`tadd`, `uadd`, `utme`, `utpc`, `bhrt`, `bmis`, `bply`,
+   * `blop`, `bitu`, `bovc`, `bcrt`, `biro`, `bwlb`, `bwll`, `buns`,
+   * `bbgl`, `bkrk`) present on every one of the 332 rescanned tracks --
+   * see docs/decisions.md's 2026-09-14 entry. Rather than guess which of
+   * those (mostly still-unidentified) flags actually gate re-analysis,
+   * carrying the whole original record forward reproduces whatever state
+   * Serato itself already considered "done" for that file.
+   *
+   * A track with no matching record (genuinely new material Serato has
+   * never analyzed anywhere) still falls back to the minimal synthesis --
+   * there is nothing to carry forward for it, and Serato has to analyze
+   * it at least once regardless of what this writer does.
+   */
+  sourceRecords?: Map<string, Buffer>;
 }
 
 export interface DatabaseV2WriteResult {
@@ -56,6 +85,16 @@ export interface DatabaseV2WriteResult {
   filePath: string;
   /** Count of unique tracks written -- see buildUniqueTrackList's dedup. */
   trackCount: number;
+  /**
+   * Of `trackCount`, how many were written by carrying forward a full
+   * original record from `options.sourceRecords` (see that option's doc)
+   * rather than the minimal `pfil`+`ttyp` synthesis. Surfaced so callers
+   * (and James) can see at a glance whether a burn is expected to trigger
+   * re-analysis: a burn where this is far below `trackCount` means most
+   * tracks have no prior analyzed record to carry forward and Serato will
+   * still need to analyze them at least once.
+   */
+  preservedCount: number;
 }
 
 /**
@@ -88,15 +127,19 @@ export async function writeDatabaseV2(
   await fs.mkdir(seratoDir, { recursive: true });
 
   const uniqueTracks = buildUniqueTrackList(tree);
-  const relativeTracks = uniqueTracks.map((t) => ({
-    relativePath: toRelativePath(t.sourcePath, resolvedVolumeRoot),
-    ext: t.ext,
-  }));
+  const sourceRecords = options.sourceRecords;
+  let preservedCount = 0;
+  const relativeTracks = uniqueTracks.map((t) => {
+    const relativePath = toRelativePath(t.sourcePath, resolvedVolumeRoot);
+    const sourceRecord = sourceRecords?.get(path.resolve(t.sourcePath));
+    if (sourceRecord) preservedCount += 1;
+    return { relativePath, ext: t.ext, sourceRecord };
+  });
 
   const buffer = buildDatabaseV2Buffer(relativeTracks);
   await fs.writeFile(filePath, buffer);
 
-  return { filePath, trackCount: uniqueTracks.length };
+  return { filePath, trackCount: uniqueTracks.length, preservedCount };
 }
 
 /**
@@ -141,19 +184,70 @@ function toRelativePath(sourcePath: string, volumeRoot: string): string {
   return relative.split(path.sep).join('/');
 }
 
-function buildDatabaseV2Buffer(tracks: Array<{ relativePath: string; ext: string }>): Buffer {
+function buildDatabaseV2Buffer(
+  tracks: Array<{ relativePath: string; ext: string; sourceRecord?: Buffer }>
+): Buffer {
   const vrsn = buildChunk('vrsn', encodeUtf16BE(DATABASE_V2_VERSION_PAYLOAD));
   const trackChunks = tracks.map(buildTrackEntryChunk);
   return Buffer.concat([vrsn, ...trackChunks]);
 }
 
-function buildTrackEntryChunk(t: { relativePath: string; ext: string }): Buffer {
+function buildTrackEntryChunk(t: { relativePath: string; ext: string; sourceRecord?: Buffer }): Buffer {
+  if (t.sourceRecord) {
+    return buildChunk('otrk', replacePfilInRawPayload(t.sourceRecord, t.relativePath));
+  }
   const fileType = t.ext.startsWith('.') ? t.ext.slice(1) : t.ext;
   const fields = Buffer.concat([
     buildChunk('pfil', encodeUtf16BE(t.relativePath)),
     buildChunk('ttyp', encodeUtf16BE(fileType)),
   ]);
   return buildChunk('otrk', fields);
+}
+
+/**
+ * Re-emits a raw `otrk` payload (as produced by
+ * `databaseV2Reader.ts`'s `parseRawDatabaseV2Records`) with every
+ * sub-chunk byte-for-byte unchanged except `pfil`, which is replaced
+ * with `newRelativePath` -- the only field that's actually different at
+ * the new destination. Preserves sub-chunk ORDER too (rebuilding by
+ * walking the original payload in place, rather than, say, appending a
+ * fresh `pfil` chunk and dropping the old one), on the theory that if
+ * Serato's own writer always puts fields in a particular order, matching
+ * that order as closely as possible is strictly safer than deviating
+ * from it for no reason -- nothing currently observed suggests order
+ * matters, but there's no upside to risking it either.
+ *
+ * If the source record has no `pfil` field at all (not observed in
+ * practice -- `parseRawDatabaseV2Records` already requires one to key
+ * the record by path in the first place), one is appended at the end
+ * rather than silently dropping the path.
+ */
+function replacePfilInRawPayload(rawPayload: Buffer, newRelativePath: string): Buffer {
+  const newPfilChunk = buildChunk('pfil', encodeUtf16BE(newRelativePath));
+  const outChunks: Buffer[] = [];
+  let offset = 0;
+  let replaced = false;
+
+  while (offset + 8 <= rawPayload.length) {
+    const tag = rawPayload.toString('ascii', offset, offset + 4);
+    const len = rawPayload.readUInt32BE(offset + 4);
+    const fieldStart = offset + 8;
+    const fieldEnd = fieldStart + len;
+    if (len < 0 || fieldEnd > rawPayload.length) break;
+
+    if (tag === 'pfil') {
+      outChunks.push(newPfilChunk);
+      replaced = true;
+    } else {
+      outChunks.push(rawPayload.subarray(offset, fieldEnd));
+    }
+
+    offset = fieldEnd;
+  }
+
+  if (!replaced) outChunks.push(newPfilChunk);
+
+  return Buffer.concat(outChunks);
 }
 
 /** Same container format as `.crate` files -- see databaseV2Reader.ts and

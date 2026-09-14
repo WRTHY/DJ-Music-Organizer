@@ -8,6 +8,26 @@ import { DATABASE_V2_FILENAME } from '../src/serato/databaseV2Writer';
 import { readDatabaseV2 } from '../src/serato/databaseV2Reader';
 import { JsonTrackIndexStore } from '../src/trackIndex/trackIndexStore';
 
+// Independent chunk/UTF-16BE encoding, same rationale as
+// databaseV2Writer.test.ts's copy: builds fixture bytes the way a real
+// already-analyzed database V2 looks, rather than only round-tripping
+// against this project's own writer.
+function tlv(tag: string, payload: Buffer): Buffer {
+  const header = Buffer.alloc(8);
+  header.write(tag, 0, 'ascii');
+  header.writeUInt32BE(payload.length, 4);
+  return Buffer.concat([header, payload]);
+}
+function encodeUtf16BE(str: string): Buffer {
+  const le = Buffer.from(str, 'utf16le');
+  const be = Buffer.alloc(le.length);
+  for (let i = 0; i + 1 < le.length; i += 2) {
+    be[i] = le[i + 1];
+    be[i + 1] = le[i];
+  }
+  return be;
+}
+
 /**
  * Phase 3 (docs/roadmap.md): the burn-to-flash orchestrator composes
  * diffing, copying, crate writing, and read-back verification into one
@@ -120,6 +140,67 @@ describe('burnToFlash', () => {
     expect(secondReport.verification.ok).toBe(true); // the crate side still burns and verifies normally
     const bytesAfterSecondBurn = await fs.readFile(dbV2Path);
     expect(bytesAfterSecondBurn).toEqual(originalBytes); // byte-for-byte untouched, not merged or regenerated
+  });
+
+  /**
+   * The 2026-09-14 fix: a burn can be pointed at an already-analyzed
+   * `database V2` (e.g. James's live library) so tracks it already knows
+   * about carry their full analysis-state records forward instead of
+   * being re-synthesized minimally -- see
+   * `DatabaseV2WriteOptions.sourceRecords`'s doc for the hardware
+   * evidence this addresses (docs/decisions.md, 2026-09-14).
+   */
+  it('sourceDatabaseV2: carries an already-analyzed track record forward into a fresh burn', async () => {
+    const houseTrack = path.join(sourceDir, 'house1.mp3');
+    await fs.writeFile(houseTrack, 'house content');
+    const tree = treeOf(node('House', ['House'], [track(houseTrack)]));
+
+    // A separate "already-analyzed database V2" -- its own file, unrelated
+    // to the burn destination -- with a full record for this exact source
+    // track. Its pfil ("house1.mp3") is deliberately given volumeRoot:
+    // sourceDir below, so it resolves to the real houseTrack path directly
+    // -- exactly the shape of "the same track, already analyzed elsewhere
+    // (e.g. James's live library), now being burned to a fresh drive."
+    const sourceDbDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mlo-burn-analyzed-'));
+    const sourceDbPath = path.join(sourceDbDir, 'database V2');
+    const analyzedRecord = Buffer.concat([
+      tlv('pfil', encodeUtf16BE('house1.mp3')),
+      tlv('ttyp', encodeUtf16BE('mp3')),
+      tlv('tsng', encodeUtf16BE('Already Analyzed')),
+      tlv('bbgl', Buffer.from([1])), // beatgrid-locked flag -- not decoded by readDatabaseV2 at all
+    ]);
+    await fs.writeFile(
+      sourceDbPath,
+      Buffer.concat([tlv('vrsn', encodeUtf16BE('2.0/Serato Scratch LIVE Database')), tlv('otrk', analyzedRecord)])
+    );
+
+    const report = await burnToFlash(tree, volumeDir, {
+      store,
+      sourceDatabaseV2: { filePath: sourceDbPath, volumeRoot: sourceDir },
+    });
+
+    expect(report.databaseV2).toMatchObject({ written: true, trackCount: 1, preservedCount: 1 });
+
+    const dbV2Path = path.join(volumeDir, '_Serato_', DATABASE_V2_FILENAME);
+    const readBack = await readDatabaseV2(dbV2Path);
+    expect(readBack.tracks).toEqual([
+      {
+        rawPath: 'House/house1.mp3', // repointed at the burn destination's own path, not the source library's
+        fileType: 'mp3',
+        title: 'Already Analyzed', // carried forward from the analyzed record
+      },
+    ]);
+
+    await fs.rm(sourceDbDir, { recursive: true, force: true });
+  });
+
+  it('sourceDatabaseV2 omitted: burns exactly as before this option existed (minimal fields, preservedCount 0)', async () => {
+    const houseTrack = path.join(sourceDir, 'house1.mp3');
+    await fs.writeFile(houseTrack, 'house content');
+    const tree = treeOf(node('House', ['House'], [track(houseTrack)]));
+
+    const report = await burnToFlash(tree, volumeDir, { store });
+    expect(report.databaseV2).toMatchObject({ written: true, trackCount: 1, preservedCount: 0 });
   });
 
   it('second burn with no source changes: copies nothing, but the crate database still references every track', async () => {

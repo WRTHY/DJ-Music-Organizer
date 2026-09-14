@@ -1,4 +1,7 @@
-import { parseDatabaseV2Buffer } from '../src/serato/databaseV2Reader';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { parseDatabaseV2Buffer, parseRawDatabaseV2Records, readRawDatabaseV2Records } from '../src/serato/databaseV2Reader';
 
 /**
  * Builds synthetic chunks matching the format confirmed in
@@ -147,5 +150,76 @@ describe('parseDatabaseV2Buffer', () => {
 
     const result = parseDatabaseV2Buffer(otrk);
     expect(result.tracks).toEqual([{ rawPath: 'track.mp3' }]);
+  });
+});
+
+/**
+ * `parseRawDatabaseV2Records`/`readRawDatabaseV2Records` exist so
+ * `databaseV2Writer.ts` can carry a track's ENTIRE original record
+ * forward (docs/decisions.md, 2026-09-14 entry) rather than only the
+ * handful of named fields `parseDatabaseV2Buffer` above decodes. These
+ * tests are deliberately about preserving fields the named-field parser
+ * doesn't even know about (`sbav`, `utme` here) -- that's the whole
+ * point of a separate raw path.
+ */
+describe('parseRawDatabaseV2Records / readRawDatabaseV2Records', () => {
+  it('keys each raw otrk payload by its resolved absolute path, preserving unknown fields byte-for-byte', () => {
+    const volumeRoot = '/library';
+    const otrk1 = tlv(
+      'otrk',
+      Buffer.concat([
+        tlv('pfil', encodeUtf16BE('House/track1.mp3')),
+        tlv('sbav', Buffer.from([0x01, 0x02])), // unidentified field -- must survive anyway
+        tlv('utme', uint32BE(1697803180)), // not decoded by parseDatabaseV2Buffer -- must survive anyway
+      ])
+    );
+    const otrk2 = tlv('otrk', Buffer.concat([tlv('pfil', encodeUtf16BE('House/track2.mp3'))]));
+
+    const buffer = Buffer.concat([tlv('vrsn', encodeUtf16BE('2.0/Serato Scratch LIVE Database')), otrk1, otrk2]);
+    const records = parseRawDatabaseV2Records(buffer, volumeRoot);
+
+    expect(records.size).toBe(2);
+    const record1 = records.get(path.resolve(volumeRoot, 'House/track1.mp3'));
+    expect(record1).toBeDefined();
+    // The raw record is the otrk chunk's payload exactly as it appeared
+    // in the source buffer -- unknown fields (sbav, utme) included.
+    expect(record1!.equals(otrk1.subarray(8))).toBe(true);
+    expect(records.has(path.resolve(volumeRoot, 'House/track2.mp3'))).toBe(true);
+  });
+
+  it('skips a track record with no pfil field rather than storing it under a bogus key', () => {
+    const otrk = tlv('otrk', Buffer.concat([tlv('tsng', encodeUtf16BE('No Path Here'))]));
+    const records = parseRawDatabaseV2Records(otrk, '/library');
+    expect(records.size).toBe(0);
+  });
+
+  it('returns copies, not views into the source buffer', () => {
+    const otrk = tlv('otrk', Buffer.concat([tlv('pfil', encodeUtf16BE('a.mp3'))]));
+    const buffer = Buffer.concat([otrk]);
+    const records = parseRawDatabaseV2Records(buffer, '/library');
+    const record = records.get(path.resolve('/library', 'a.mp3'))!;
+
+    buffer.fill(0); // mutate the source buffer after parsing
+    expect(record.equals(Buffer.alloc(0))).toBe(false); // the stored copy is unaffected
+  });
+
+  it('readRawDatabaseV2Records reads a real file from disk read-only', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'mlo-dbv2-raw-read-'));
+    try {
+      const filePath = path.join(dir, 'database V2');
+      const otrk = tlv('otrk', Buffer.concat([tlv('pfil', encodeUtf16BE('Inbox/track.mp3'))]));
+      const original = Buffer.concat([tlv('vrsn', encodeUtf16BE('2.0/Serato Scratch LIVE Database')), otrk]);
+      await fs.writeFile(filePath, original);
+
+      const records = await readRawDatabaseV2Records(filePath, dir);
+      expect(records.size).toBe(1);
+      expect(records.has(path.resolve(dir, 'Inbox/track.mp3'))).toBe(true);
+
+      // Read-only: the file on disk is untouched.
+      const afterRead = await fs.readFile(filePath);
+      expect(afterRead.equals(original)).toBe(true);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 });

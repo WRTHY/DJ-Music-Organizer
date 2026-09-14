@@ -335,22 +335,43 @@ Deliverables, in build order:
    later one (Deliverable 5), so the two stay separate rather than
    conflated. `core` suite: 99 tests (up from 92), clean. Full write-up
    in `docs/decisions.md`, 2026-09-12 entry.
-5. **Trust gate, same pattern as Phase 2/3 — the only piece left in this
-   phase**: proven against scratch fixtures and round-trip tests first
-   (done, Deliverables 3–4 above); the actual hardware checkpoint is
-   burning to a genuinely blank drive and confirming Serato shows the
-   library **without** the manual "add folder" step this phase exists to
-   remove. Needs James's own spare USB and a few minutes with real
-   Serato — same shape as Phase 2's checkpoint (which, per the entry
-   above, has itself now happened and is what surfaced this whole
-   phase).
+5. **Trust gate, same pattern as Phase 2/3 — done, 2026-09-14 (partially:
+   see Deliverable 6).** Burned a genuinely blank drive and confirmed
+   Serato shows the full folder/crate structure on a second machine with
+   **no** manual "add folder" step — the core hypothesis this whole phase
+   exists to test. **But** the same test surfaced a real regression this
+   phase hadn't anticipated: Serato wanted to re-analyze all ~15,000
+   tracks on the burned drive. Full diagnosis and fix in Deliverable 6.
+6. **Fix: preserve analysis state across a burn — done, 2026-09-14 (new
+   deliverable, added after Deliverable 5's hardware result).** Diagnosed
+   and confirmed (full detail in `docs/decisions.md`, 2026-09-14 entry):
+   the minimal `pfil`+`ttyp` field set from Deliverable 3, while
+   sufficient for a track to *show up*, is not sufficient to stop Serato
+   re-analyzing it — proven directly via a `DBV2-legacy.zip` Serato wrote
+   on James's own re-tested trial-burn drive, an automatic backup of
+   exactly this project's minimal output, replaced by Serato's own
+   106 KB rewrite adding 17 fields present on every rescanned track.
+   Fix: `databaseV2Writer.ts`'s new `sourceRecords` option carries a
+   track's *entire* original record forward byte-for-byte (only `pfil`
+   rewritten) when one is available from an already-analyzed
+   `database V2`, via new raw-record read functions in
+   `databaseV2Reader.ts` and a `sourceDatabaseV2` option threaded through
+   `burnToFlash.ts`. `core` suite: 108 tests (up from 99), clean
+   typecheck, plus a direct smoke test against James's real, live
+   11,991-track `database V2`.
+   **Still open**: which file to actually pass as `sourceDatabaseV2` for
+   a real burn (the live `E:\_Serato_\database V2` vs. the
+   `E:\LIBRARY BACKUP 9_10_2026\_Serato_` copy) — a real design/UX
+   question, unresolved. This is a core-only capability for now; no
+   desktop UI wiring yet (that's separate, not-yet-started Phase 3b UI
+   work).
 
 Testing: same posture as Phase 2 — unit tests against synthetic trees,
 property-based round-trip testing, nothing near James's real
-`E:\_Serato_` at any point (there's no reason this phase should ever
-touch it; it only writes to drives that don't have a `database V2`
-yet). Real-hardware confirmation is the final step, not a substitute
-for the automated suite.
+`E:\_Serato_` at any point except read-only inspection to diagnose
+Deliverable 6 (never written to). Real-hardware confirmation
+(Deliverable 5) and its follow-up fix (Deliverable 6) are the final
+steps, not a substitute for the automated suite that came before them.
 
 ## Phase 4 — Opt-in live migration (highest risk, latest, explicitly gated)
 
