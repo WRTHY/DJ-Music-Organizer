@@ -262,61 +262,88 @@ first, in the lowest-risk setting available, same as Phase 2 did for
 crates.
 
 Deliverables, in build order:
-1. **Research**: `database V2` is undocumented the same way the crate
-   format was, but less obscure — reverse-engineering it has already
-   been done by others in the course of building Serato-library import
-   for other DJ software (the same category of source that led to
-   `fragmede/rekordbox-pdb` being a genuine independent oracle for the
-   Rekordbox side, per the 2026-09-10 entry in `docs/decisions.md`).
-   Find that prior art first rather than starting from zero. Then
-   validate directly against a real file already on hand — James's own
-   library backup has one at
-   `E:\LIBRARY BACKUP 9_10_2026\_Serato_\database V2` (~8 MB) — the same
-   "confirm against a real library" step that validated the crate
-   format on 2026-09-01. Specific open questions to resolve before
-   writing any code:
+1. **Research — done, 2026-09-11.** `database V2` turned out to use the
+   exact same outer chunk framing as `.crate` files, confirmed by
+   walking James's real file
+   (`E:\LIBRARY BACKUP 9_10_2026\_Serato_\database V2`, ~8 MB, 11,991
+   tracks) byte-by-byte rather than trusting a write-up — full findings
+   and the complete field-tag table are in the new
+   `docs/serato-database-v2-format.md`; the investigation itself is in
+   `docs/decisions.md`'s 2026-09-11 entry. Every open question below is
+   answered there:
    - Same outer chunk framing as `.crate` files (4-byte tag + 4-byte
-     big-endian length), or something else at the top level?
-   - What fields are actually *required* for Serato to treat a track as
-     known and show it in a crate — versus fields Serato merely
-     displays (title, artist, BPM, key, etc.) but can regenerate or
-     leave blank without refusing the entry? Minimum viable is likely
-     smaller than the full field set Serato itself writes.
-   - Does `database V2` encode crate membership at all, or is that
-     purely the separate `.crate` files, as assumed? (Current working
-     assumption, per `serato-crate-format.md`, is the latter —
-     confirm rather than continue assuming.)
-   - Per-track analysis data (waveform, cues, beatgrid) — confirmed
-     working assumption is that it lives in the audio file's own ID3
-     GEOB frames, not in `database V2`, which would mean this project's
-     existing `fs.copyFile`-based copy already carries it over for
-     free. Worth confirming explicitly rather than leaving implicit,
-     since it's the kind of assumption that's easy to get quietly wrong.
-   - Any checksum, version counter, or other integrity field Serato
-     checks before trusting the file, the way `vrsn` works in `.crate`
-     files.
-2. **Reader** (`packages/core/src/serato/databaseV2Reader.ts`): prove
-   the format is understood before writing anything — mirrors how
+     big-endian length)? **Yes, confirmed identical.**
+   - What fields are actually *required*? **Not provable without a live
+     Serato write/reload test (that's Deliverable 5's job, not this
+     one)**, but Serato's own "rebuilding the database" support article
+     implies a from-scratch writer likely only needs `pfil` (and
+     probably `ttyp`) right, trusting Serato's own scan to backfill the
+     rest.
+   - Does `database V2` encode crate membership? **No — confirmed both
+     by the byte walk and by an independent secondary source.** The
+     `serato-crate-format.md` assumption stands.
+   - Per-track analysis data (waveform, cues, beatgrid) — in the audio
+     file's ID3 tags, or in `database V2`? **Confirmed: the file's own
+     ID3 GEOB tags** (pulled real ID3 frames off a sampled track and
+     found `Serato Overview`/`Analysis`/`Autotags`/`Markers_`/
+     `Markers2`/`BeatGrid`/`Offsets_` GEOB frames; none of that data is
+     in `database V2`). The existing `fs.copyFile`-based copy already
+     carries it over for free — confirmed, not just assumed now.
+   - Any checksum/integrity field? **None found** — the byte walk
+     leaves nothing unaccounted for.
+2. **Reader — done, 2026-09-11**
+   (`packages/core/src/serato/databaseV2Reader.ts`): proved the format
+   is understood before writing anything — mirrors how
    `crateDatabaseReader.ts` came before `crateDatabaseWriter.ts`.
-   Validated by parsing James's real `database V2` and cross-checking
-   whatever's extractable against what Serato itself already shows for
-   that library (track count at minimum; more if practical).
-3. **Writer, blank-drive case only** (`databaseV2Writer.ts`): given a
-   `CanonicalTree`, write a `database V2` from nothing — no existing
-   file to merge against. Round-trip tested the same way
-   `crateDatabaseWriter.ts` was: write → read back with the new reader
-   → diff, plus property-based testing for tree-shape coverage, all
-   against scratch/synthetic data only.
-4. **Wire into `burnToFlash.ts`**: alongside the existing
-   `writeCrateDatabase` call, so a burn to a target with no prior
-   `_Serato_` folder produces both — but only for that case (detect an
-   existing `database V2` at the target and refuse/skip rather than
-   guess, until the merge case in a later phase exists).
-5. **Trust gate, same pattern as Phase 2/3**: proven against scratch
-   fixtures and round-trip tests first; the actual hardware checkpoint
-   is burning to a genuinely blank drive and confirming Serato shows
-   the library **without** the manual "add folder" step this phase
-   exists to remove.
+   Tested against synthetic buffers and a byte-for-byte reproduction of
+   the real confirmed layout (`__tests__/databaseV2Reader.test.ts`, 5
+   tests, passing alongside the full existing 92-test suite), then run
+   directly against the real file: parsed all 11,991 tracks cleanly,
+   matched the version string. Serato's own `bmis`/`bcrt` flags mark 308
+   tracks missing-at-last-scan and 35 corrupt — **not yet cross-checked
+   against what Serato's own UI shows for this library**, which is the
+   quick, real confirmation still worth doing before leaning on this
+   reader further (a live look at the "All..." crate's counts).
+3. **Writer, blank-drive case only — done, 2026-09-12**
+   (`packages/core/src/serato/databaseV2Writer.ts`): given a
+   `CanonicalTree`, writes a `database V2` from nothing — no existing
+   file to merge against; refuses outright if one already exists at the
+   target rather than merging or guessing. Field set per track is
+   deliberately minimal (`pfil` + `ttyp` only — see Deliverable 1's
+   "required vs. displayed" finding above). Two properties this format
+   requires that the crate writer doesn't: every unique track gets
+   exactly one entry regardless of how many crates reference it
+   (deduplicated by track id — proven with a property-based test, not
+   just hand-picked cases), and root-level (uncrated) tracks are
+   included rather than skipped, since `database V2` has no concept of
+   crate placement at all. Round-trip tested the same way
+   `crateDatabaseWriter.ts` was: write → read back with the Deliverable
+   2 reader → diff (`databaseV2Writer.test.ts`, 5 cases) + property-based
+   testing for the dedup property specifically
+   (`databaseV2Writer.property.test.ts`, 40 runs).
+4. **Wire into `burnToFlash.ts` — done, 2026-09-12**: alongside the
+   existing `writeCrateDatabase` call, a burn now also writes a fresh
+   `database V2` when the target's `_Serato_` folder doesn't already
+   have one. The existing-file check happens in `burnToFlash.ts` itself
+   (`writeDatabaseV2IfBlank`), ahead of calling the writer, so a burn to
+   a volume that already has a real `database V2` reports a normal,
+   expected outcome on the report (`databaseV2: { written: false,
+   reason: 'already-exists' }`) instead of the writer's own
+   defense-in-depth throw aborting an otherwise-successful burn.
+   Deliberately kept out of `BurnVerification`'s `ok` flag — that's
+   Phase 3's already-established trust gate, and this phase has its own
+   later one (Deliverable 5), so the two stay separate rather than
+   conflated. `core` suite: 99 tests (up from 92), clean. Full write-up
+   in `docs/decisions.md`, 2026-09-12 entry.
+5. **Trust gate, same pattern as Phase 2/3 — the only piece left in this
+   phase**: proven against scratch fixtures and round-trip tests first
+   (done, Deliverables 3–4 above); the actual hardware checkpoint is
+   burning to a genuinely blank drive and confirming Serato shows the
+   library **without** the manual "add folder" step this phase exists to
+   remove. Needs James's own spare USB and a few minutes with real
+   Serato — same shape as Phase 2's checkpoint (which, per the entry
+   above, has itself now happened and is what surfaced this whole
+   phase).
 
 Testing: same posture as Phase 2 — unit tests against synthetic trees,
 property-based round-trip testing, nothing near James's real

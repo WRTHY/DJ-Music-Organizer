@@ -2,6 +2,158 @@
 
 Lightweight ADR-style log of the choices behind this project. Newest first.
 
+## 2026-09-12 — Phase 3b Deliverables 3-4: `database V2` writer built and wired into `burnToFlash.ts`, blank-drive case only
+
+Followed the reader (2026-09-11 entry below) with its inverse, same
+"prove the format before writing anything, then wire it in" order Phase
+2 followed for crates. Two things about this writer's shape are
+deliberate departures from `crateDatabaseWriter.ts`, both worth
+recording since they're easy to get quietly wrong:
+
+- **Deduplication.** `database V2` is a flat master index of unique
+  files (confirmed 2026-09-11: no crate membership encoded in it at
+  all), not a per-crate structure like `.crate`. The crate writer
+  deliberately writes the *same* track into every crate file it belongs
+  to (one crate = one folder). This writer must instead collapse a track
+  referenced from several crates into exactly one `otrk` entry —
+  `buildUniqueTrackList` dedupes by `TrackRef.id` before writing.
+  Verified specifically with a property-based test (`database
+  V2Writer.property.test.ts`) that assigns each of a random pool of
+  tracks to a random non-empty subset of crates and asserts the written
+  track count always equals the number of *distinct* tracks, never the
+  number of (track, crate) memberships.
+- **Root-level tracks are included, not skipped.** The crate writer
+  returns tracks sitting directly on the tree's root as
+  `skippedRootTracks`, since Serato's crate model has no "uncrated"
+  bucket. `database V2` has no concept of "which crate" at all, so there
+  is no reason to exclude them here — every track the canonical tree
+  knows about belongs in the master index. Covered directly in
+  `databaseV2Writer.test.ts`.
+
+**Field set stays deliberately minimal**: only `pfil` (path) and `ttyp`
+(file type) per track — not a full reproduction of a real Serato scan's
+output. This is the direct, practical consequence of 2026-09-11's
+"required vs. displayed fields" finding: Serato's own "rebuilding the
+database" support article implies a normal scan regenerates everything
+else from the files themselves, so this writer leans on that instead of
+guessing at a fuller field set with no way to confirm it's right without
+hardware. That confirmation is explicitly Deliverable 5's job, not this
+one — if a real burned drive needs more than `pfil`/`ttyp` to show up
+correctly, the hardware checkpoint is where that will be found.
+
+**Same "blank-drive case only" boundary enforced twice, not once**:
+`writeDatabaseV2` itself refuses if a `database V2` already exists at
+the target (throws rather than merge/overwrite), and `burnToFlash.ts`'s
+new `writeDatabaseV2IfBlank` checks for that existing file *before*
+calling the writer, so a burn to a volume that already has a real,
+in-use `database V2` reports a normal, expected outcome
+(`databaseV2: { written: false, reason: 'already-exists' }`) rather than
+the writer's own defense-in-depth throw aborting an otherwise-successful
+burn (crate database written, files copied, just database V2 correctly
+left alone). Proven directly: burn once to a blank volume, then burn
+again after adding a track — the crate side updates normally (Phase 3's
+already-proven behavior), while the `database V2` file is confirmed
+byte-for-byte untouched.
+
+**Kept deliberately out of `BurnVerification`**: the existing `ok` flag
+on a burn report is Phase 3's already-established trust gate (decisions
+17–20, 22, 24 below); Phase 3b has its own later hardware checkpoint
+(Deliverable 5), so `DatabaseV2BurnOutcome` is a separate field on
+`BurnReport` rather than folded into `verifyBurn`'s pass/fail logic —
+avoids conflating two different phases' trust gates, and avoids a
+`written: false` (a completely normal, expected outcome on a
+non-blank volume) ever flipping `ok` to `false` for no real reason.
+
+Testing: `databaseV2Writer.test.ts` (5 hand-picked cases: multi-crate
+dedup, root tracks included, an empty/zero-track database, the
+already-exists refusal, a track outside `volumeRoot` rejected) +
+`databaseV2Writer.property.test.ts` (40 random runs proving the dedup
+property) + 2 new cases in `burnToFlash.test.ts` covering the wiring
+itself. `core` suite: 99 tests (up from 92), all green, clean typecheck.
+
+Deliverable 5 (the hardware trust gate — burn to a genuinely blank
+drive, confirm Serato shows the library with no manual "add folder"
+step) is the only piece of Phase 3b left, and it needs James's own spare
+USB and a few minutes with real Serato — same shape as Phase 2's
+checkpoint (decision 24 below).
+
+## 2026-09-11 — Phase 3b Deliverables 1-2: `database V2` format confirmed and read, by parsing the real file rather than trusting a write-up
+
+Followed up directly on the hardware-checkpoint finding above by doing
+Phase 3b's Research deliverable the way `docs/roadmap.md` asked for it:
+find prior art first, then validate against a real file already on
+hand, same rigor as the 2026-09-01 crate-format validation. Secondary
+sources (a DeepWiki analysis of `bvandrc/serato-tools`, Serato's own
+support articles) were found and were useful, but every claim below was
+independently confirmed by writing a small script and walking James's
+real `database V2` (`E:\LIBRARY BACKUP 9_10_2026\_Serato_\database V2`,
+7,964,819 bytes) byte-by-byte -- the secondary sources corroborate, they
+aren't the evidence.
+
+Findings, answering every open question Phase 3b's Research deliverable
+listed:
+
+- **Container format**: identical to `.crate` files -- 4-byte ASCII tag
+  + 4-byte big-endian length + payload, applied flat at the top level.
+  Walking the real file this way accounts for all 7,964,819 bytes with
+  nothing left over: one `vrsn` chunk (`2.0/Serato Scratch LIVE
+  Database` -- a different version string from `.crate`'s
+  `1.0/Serato ScratchLive Crate`, confirming a related-but-distinct
+  format sharing one container scheme), then exactly one `otrk` chunk
+  per track -- 11,991 of them in this library.
+- **Crate membership**: not encoded here at all, confirmed both by the
+  byte walk (no crate-name-bearing field anywhere, no separate
+  membership chunk -- just `vrsn` then a flat run of `otrk`s) and by the
+  DeepWiki write-up independently saying the same thing. The
+  `serato-crate-format.md` assumption stands.
+- **Required vs. displayed fields**: not fully provable without a live
+  write-and-reload test in real Serato (that's the eventual hardware
+  gate, not this research pass), but Serato's own "rebuilding the
+  database" support article says a rebuild re-derives everything except
+  Date Added straight from the files -- meaning a from-scratch writer
+  likely only needs to get `pfil` (and probably `ttyp`) right and can
+  trust Serato's own scan to backfill the rest, rather than needing to
+  reproduce the full field set a normal Serato scan writes.
+- **Per-track analysis data (waveform, cues, beatgrid)**: confirmed
+  live in the audio file's own ID3 tags, not in `database V2` at all --
+  pulled the real ID3 frames off the sampled track and found
+  `GEOB:Serato Overview`, `GEOB:Serato Analysis`, `GEOB:Serato
+  Autotags`, `GEOB:Serato Markers_`, `GEOB:Serato Markers2`, `GEOB:Serato
+  BeatGrid`, and `GEOB:Serato Offsets_`. None of that binary data
+  appears in any `otrk` entry. This means the project's existing
+  whole-file `fs.copyFile` copy step already preserves it for free --
+  no additional work needed, an assumption that's now confirmed rather
+  than implicit.
+- **Checksum/integrity field**: none -- the byte walk leaves nothing
+  unaccounted for, and the only file-level marker is the single `vrsn`
+  string, same role it plays in `.crate` files.
+
+Full field-tag table (35 sub-chunks sampled per track entry, type
+inferred from the tag's first letter -- `t`=UTF-16BE text, `u`=uint32BE,
+`b`=1-byte boolean, matching the same convention DeepWiki documents
+independently) is in the new `docs/serato-database-v2-format.md`, not
+repeated here.
+
+Deliverable 2 (the reader) followed immediately, same "prove the format
+before writing anything" order as `crateDatabaseReader.ts` before
+`crateDatabaseWriter.ts`: `packages/core/src/serato/databaseV2Reader.ts`,
+tested against both synthetic buffers and a byte-for-byte reproduction
+of the real confirmed layout (`__tests__/databaseV2Reader.test.ts`, 5
+tests, all passing alongside the full existing 92-test suite). Run
+directly against the real 8 MB file in the verification sandbox: parsed
+all 11,991 tracks cleanly, matched the version string, and surfaced two
+things worth a plain read rather than silent success -- Serato's own
+`bmis` flag marks 308 of those tracks as missing-at-last-scan, and
+`bcrt` marks 35 as corrupt. Neither number has been cross-checked
+against what Serato's own UI shows for this library yet (a live look at
+the "All..." crate's track/missing counts would be the quick, real
+confirmation) -- flagging that as the next easy verification step
+rather than treating "the reader parsed the file without crashing" as
+proof it's reading Serato's intent correctly.
+
+Deliverables 3-5 (writer, `burnToFlash.ts` wiring, hardware trust gate)
+are still ahead, unstarted, per `docs/roadmap.md`.
+
 ## 2026-09-11 — The Phase 2/3 hardware checkpoint finally happened, and it found the real gap: `.crate` files alone don't make Serato see a library
 
 James plugged `D:\TRIAL_BURN` into a real machine with real Serato

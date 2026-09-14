@@ -1,3 +1,4 @@
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { CanonicalTree, allTracks } from '../types';
 import { TrackIndexStore } from '../trackIndex';
@@ -13,6 +14,7 @@ import {
 } from '../organizer';
 import { readCrateDatabase } from './crateDatabaseReader';
 import { CrateWriteResult, writeCrateDatabase } from './crateDatabaseWriter';
+import { DATABASE_V2_FILENAME, DatabaseV2WriteResult, writeDatabaseV2 } from './databaseV2Writer';
 
 export interface BurnOptions {
   store: TrackIndexStore;
@@ -96,10 +98,27 @@ export function diffTrackPlacement(
   return { missingTrackIds, unexpectedTrackIds, misplacedTrackIds };
 }
 
+/**
+ * What happened to the `database V2` file on this burn (Phase 3b,
+ * docs/roadmap.md Deliverable 4). Deliberately kept separate from
+ * `BurnVerification` above rather than folded into its `ok` flag -- that
+ * flag is Phase 3's already-established trust gate (decisions 17-20,
+ * 22, 24), and Phase 3b has its own, later hardware checkpoint
+ * (Deliverable 5) rather than inheriting Phase 3's. A burn to a target
+ * that already has a `database V2` is not a failure -- it's this
+ * writer's own out-of-scope-for-now case (see databaseV2Writer.ts's
+ * module doc) working as designed, so `written: false` is an expected,
+ * normal outcome, not an error.
+ */
+export type DatabaseV2BurnOutcome =
+  | ({ written: true } & DatabaseV2WriteResult)
+  | { written: false; reason: 'already-exists' };
+
 export interface BurnReport {
   diffSummary: DiffSummary;
   organizeReport: OrganizeReport;
   crateWriteResult: CrateWriteResult;
+  databaseV2: DatabaseV2BurnOutcome;
   verification: BurnVerification;
   completedAt: string;
 }
@@ -131,6 +150,18 @@ export interface BurnReport {
  * reads the real crate files back off disk and checks their content
  * against what was intended, rather than trusting that the write
  * succeeded just because no error was thrown.
+ *
+ * **Phase 3b, Deliverable 4 (docs/roadmap.md)**: alongside the crate
+ * database, also writes a fresh `database V2` -- but only when the
+ * target's `_Serato_` folder doesn't already have one. This is the same
+ * "blank-drive case only" boundary `databaseV2Writer.ts` enforces itself
+ * (see its module doc); it's checked here too, before calling the
+ * writer, so a burn to a volume that already has a real, in-use
+ * `database V2` reports a normal, expected skip (`databaseV2.written
+ * === false`) rather than the writer's own refusal throwing and aborting
+ * an otherwise-successful burn. Deliberately NOT part of
+ * `BurnVerification`/`verifyBurn` -- see `DatabaseV2BurnOutcome`'s doc
+ * comment for why the two trust gates stay separate.
  */
 export async function burnToFlash(
   tree: CanonicalTree,
@@ -145,10 +176,13 @@ export async function burnToFlash(
   const organizeReport = await executePlan(plan, { allowOverwrite: true });
 
   const destinationTree = treeAtDestination(tree, diff);
-  const subcratesDir = path.join(resolvedVolumeRoot, '_Serato_', 'Subcrates');
+  const seratoDir = path.join(resolvedVolumeRoot, '_Serato_');
+  const subcratesDir = path.join(seratoDir, 'Subcrates');
   const crateWriteResult = await writeCrateDatabase(destinationTree, subcratesDir, {
     volumeRoot: resolvedVolumeRoot,
   });
+
+  const databaseV2 = await writeDatabaseV2IfBlank(destinationTree, seratoDir, resolvedVolumeRoot);
 
   const verification = await verifyBurn(destinationTree, subcratesDir, resolvedVolumeRoot);
 
@@ -156,9 +190,38 @@ export async function burnToFlash(
     diffSummary: summarizeDiff(diff),
     organizeReport,
     crateWriteResult,
+    databaseV2,
     verification,
     completedAt: new Date().toISOString(),
   };
+}
+
+/**
+ * Writes `database V2` only when the target's `_Serato_` folder doesn't
+ * already have one -- checked here, ahead of calling the writer, so the
+ * expected "there's already a real one, this phase doesn't touch it"
+ * case comes back as a normal outcome on the report instead of the
+ * writer's own defense-in-depth throw aborting a burn that otherwise
+ * completed fine (crate database written, files copied). See
+ * `DatabaseV2BurnOutcome`'s doc comment for why this stays out of
+ * `BurnVerification`'s `ok` flag.
+ */
+async function writeDatabaseV2IfBlank(
+  tree: CanonicalTree,
+  seratoDir: string,
+  volumeRoot: string
+): Promise<DatabaseV2BurnOutcome> {
+  const filePath = path.join(seratoDir, DATABASE_V2_FILENAME);
+  const alreadyExists = await fs
+    .access(filePath)
+    .then(() => true)
+    .catch(() => false);
+  if (alreadyExists) {
+    return { written: false, reason: 'already-exists' };
+  }
+
+  const result = await writeDatabaseV2(tree, seratoDir, { volumeRoot });
+  return { written: true, ...result };
 }
 
 async function verifyBurn(

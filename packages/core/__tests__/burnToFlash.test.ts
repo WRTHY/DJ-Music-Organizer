@@ -4,6 +4,8 @@ import path from 'node:path';
 import { CanonicalNode, CanonicalTree, TrackRef, allTracks, emptyNode } from '../src/types';
 import { idForPath } from '../src/serato/hash';
 import { burnToFlash, diffTrackPlacement } from '../src/serato/burnToFlash';
+import { DATABASE_V2_FILENAME } from '../src/serato/databaseV2Writer';
+import { readDatabaseV2 } from '../src/serato/databaseV2Reader';
 import { JsonTrackIndexStore } from '../src/trackIndex/trackIndexStore';
 
 /**
@@ -81,6 +83,43 @@ describe('burnToFlash', () => {
 
     const copiedHouse = await fs.readFile(path.join(volumeDir, 'House', 'house1.mp3'), 'utf8');
     expect(copiedHouse).toBe('house content');
+
+    // Phase 3b, Deliverable 4: a blank target gets a fresh database V2
+    // alongside the crate database.
+    expect(report.databaseV2).toMatchObject({ written: true, trackCount: 2 });
+    const dbV2Path = path.join(volumeDir, '_Serato_', DATABASE_V2_FILENAME);
+    const dbV2ReadBack = await readDatabaseV2(dbV2Path);
+    expect(dbV2ReadBack.tracks.map((t) => t.rawPath).sort()).toEqual(
+      ['House/house1.mp3', 'Techno/techno1.mp3'].sort()
+    );
+  });
+
+  it('a second burn to a volume that already has a database V2 leaves it alone instead of overwriting or refusing the whole burn', async () => {
+    const houseTrack = path.join(sourceDir, 'house1.mp3');
+    await fs.writeFile(houseTrack, 'house content');
+    const tree = treeOf(node('House', ['House'], [track(houseTrack)]));
+
+    const firstReport = await burnToFlash(tree, volumeDir, { store });
+    expect(firstReport.databaseV2).toMatchObject({ written: true, trackCount: 1 });
+
+    const dbV2Path = path.join(volumeDir, '_Serato_', DATABASE_V2_FILENAME);
+    const originalBytes = await fs.readFile(dbV2Path);
+
+    // Add a track and burn again -- the crate database and copied files
+    // should still update normally (that's Phase 3's already-proven
+    // behavior), but database V2 is this phase's "blank drive only"
+    // case, so it must be left completely untouched on a target that
+    // already has one.
+    const newTrack = path.join(sourceDir, 'house2.mp3');
+    await fs.writeFile(newTrack, 'house content 2');
+    const updatedTree = treeOf(node('House', ['House'], [track(houseTrack), track(newTrack)]));
+
+    const secondReport = await burnToFlash(updatedTree, volumeDir, { store });
+
+    expect(secondReport.databaseV2).toEqual({ written: false, reason: 'already-exists' });
+    expect(secondReport.verification.ok).toBe(true); // the crate side still burns and verifies normally
+    const bytesAfterSecondBurn = await fs.readFile(dbV2Path);
+    expect(bytesAfterSecondBurn).toEqual(originalBytes); // byte-for-byte untouched, not merged or regenerated
   });
 
   it('second burn with no source changes: copies nothing, but the crate database still references every track', async () => {
