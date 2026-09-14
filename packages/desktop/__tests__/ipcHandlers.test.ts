@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { DATABASE_V2_FILENAME, writeDatabaseV2 } from '@mlo/core';
 import {
   burn,
   detectSeratoSource,
@@ -168,6 +169,115 @@ describe('diffBurn / burn', () => {
     expect(technoExists).toBe(false);
     const crateFiles = await fs.readdir(path.join(burnTarget, '_Serato_', 'Subcrates'));
     expect(crateFiles).not.toContain('Techno.crate');
+  });
+
+  /**
+   * Phase 3b UI wiring (docs/decisions.md, 2026-09-14): `burn`'s
+   * `sourceDatabaseV2` handling has three distinct behaviors worth
+   * testing separately -- an explicit value is trusted as-is (and echoed
+   * back on the report); an omitted one falls back to whatever
+   * `defaultSourceDatabaseV2` is passed in, but only when that file
+   * actually exists; and an omitted one with no real default present
+   * must never turn into a burn failure.
+   *
+   * `defaultSourceDatabaseV2` is deliberately passed as an explicit
+   * argument in every test here rather than left to `burn`'s own default
+   * (the real `DEFAULT_SOURCE_DATABASE_V2`, a hardcoded path on James's
+   * actual machine) -- an earlier version of this suite skipped that
+   * parameter and asserted the *absence* of a default, which happened to
+   * pass in this session's Linux sandbox (no `E:\` drive) and failed the
+   * moment James ran it for real on the machine where that exact backup
+   * lives. Building a real, controlled fixture per test is what makes
+   * these deterministic on any machine, including his.
+   */
+  it('burn carries an explicit sourceDatabaseV2 forward and reports which one was used', async () => {
+    const tree = await scanFolderTree(sourceRoot);
+
+    // A fixture "already-analyzed" database describing the very same
+    // track under sourceRoot -- realistic in shape, since a real
+    // already-analyzed database and the library it analyzed live on the
+    // same volume (e.g. James's live E:\_Serato_ describing tracks under
+    // E:\). volumeRoot here is deliberately sourceRoot, not burnTarget --
+    // this file's paths resolve against the SOURCE library, matching
+    // DatabaseV2Source's own doc in @mlo/core.
+    const analyzedDir = await makeTmpDir('mlo-ipc-analyzed-');
+    const analyzedSeratoDir = path.join(analyzedDir, '_Serato_');
+    await writeDatabaseV2(tree, analyzedSeratoDir, { volumeRoot: sourceRoot });
+    const sourceDatabaseV2 = {
+      filePath: path.join(analyzedSeratoDir, DATABASE_V2_FILENAME),
+      volumeRoot: sourceRoot,
+    };
+    // A different, unrelated default -- proves the explicit value wins
+    // over it rather than merely proving a default was never checked.
+    const unusedDefault = {
+      filePath: path.join(sourceRoot, 'nonexistent-default', DATABASE_V2_FILENAME),
+      volumeRoot: sourceRoot,
+    };
+
+    const report = await burn({ tree, targetRoot: burnTarget, sourceDatabaseV2 }, storePath, unusedDefault);
+
+    expect(report.databaseV2).toMatchObject({ written: true, trackCount: 1, preservedCount: 1 });
+    expect(report.sourceDatabaseV2Used).toEqual(sourceDatabaseV2);
+
+    await fs.rm(analyzedDir, { recursive: true, force: true });
+  });
+
+  it('burn applies the default sourceDatabaseV2 when the caller omits one and the default file exists', async () => {
+    const tree = await scanFolderTree(sourceRoot);
+
+    // Same fixture-building approach as the explicit-value test above,
+    // but passed as the *default* (3rd arg) instead of on `args` --
+    // proves resolveSourceDatabaseV2 actually checks for and uses a real
+    // default file, not just that it tolerates a missing one.
+    const analyzedDir = await makeTmpDir('mlo-ipc-analyzed-');
+    const analyzedSeratoDir = path.join(analyzedDir, '_Serato_');
+    await writeDatabaseV2(tree, analyzedSeratoDir, { volumeRoot: sourceRoot });
+    const realDefault = {
+      filePath: path.join(analyzedSeratoDir, DATABASE_V2_FILENAME),
+      volumeRoot: sourceRoot,
+    };
+
+    const report = await burn({ tree, targetRoot: burnTarget }, storePath, realDefault);
+
+    expect(report.databaseV2).toMatchObject({ written: true, trackCount: 1, preservedCount: 1 });
+    expect(report.sourceDatabaseV2Used).toEqual(realDefault);
+
+    await fs.rm(analyzedDir, { recursive: true, force: true });
+  });
+
+  it('burn falls back to minimal synthesis, without failing, when sourceDatabaseV2 is omitted and the default file does not exist', async () => {
+    const tree = await scanFolderTree(sourceRoot);
+
+    // A default that deliberately points nowhere real -- this is the
+    // "fresh checkout, or the backup folder got moved" case, and it must
+    // degrade gracefully rather than fail the burn.
+    const missingDefault = {
+      filePath: path.join(sourceRoot, 'nonexistent-default', DATABASE_V2_FILENAME),
+      volumeRoot: sourceRoot,
+    };
+
+    const report = await burn({ tree, targetRoot: burnTarget }, storePath, missingDefault);
+
+    expect(report.databaseV2).toMatchObject({ written: true, trackCount: 1, preservedCount: 0 });
+    expect(report.sourceDatabaseV2Used).toBeNull();
+  });
+
+  it('burn fails loudly when an explicit sourceDatabaseV2 path does not exist (unlike the default)', async () => {
+    const tree = await scanFolderTree(sourceRoot);
+
+    await expect(
+      burn(
+        {
+          tree,
+          targetRoot: burnTarget,
+          sourceDatabaseV2: {
+            filePath: path.join(sourceRoot, 'nonexistent', DATABASE_V2_FILENAME),
+            volumeRoot: sourceRoot,
+          },
+        },
+        storePath
+      )
+    ).rejects.toThrow();
   });
 });
 

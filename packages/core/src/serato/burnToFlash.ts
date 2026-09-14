@@ -18,6 +18,22 @@ import { CrateWriteResult, writeCrateDatabase } from './crateDatabaseWriter';
 import { DATABASE_V2_FILENAME, DatabaseV2WriteResult, writeDatabaseV2 } from './databaseV2Writer';
 import { readRawDatabaseV2Records } from './databaseV2Reader';
 
+/**
+ * A pointer to an already-analyzed `database V2` file to read (never
+ * write) per-track analysis-state records from. Pulled out as its own
+ * named type -- rather than left as the inline object type it started
+ * as -- specifically so the desktop IPC layer (Phase 3b UI wiring,
+ * docs/decisions.md) can import and re-export this one shape instead of
+ * hand-duplicating `{ filePath, volumeRoot }` a second time, the same
+ * anti-drift reasoning as `SeratoSourceType` (decision 23).
+ */
+export interface DatabaseV2Source {
+  /** Path to the source `database V2` file. Read-only -- never modified. */
+  filePath: string;
+  /** volumeRoot the source file's own `pfil` paths resolve against (i.e. the parent of ITS `_Serato_`, not necessarily the burn destination's). */
+  volumeRoot: string;
+}
+
 export interface BurnOptions {
   store: TrackIndexStore;
   /** Defaults to 'copy' -- burning duplicates the library onto a target volume, it doesn't relocate the source. */
@@ -36,13 +52,20 @@ export interface BurnOptions {
    * is "the" source risks silently reading a stale one. When omitted,
    * `burnToFlash` falls back to the minimal `pfil`+`ttyp` synthesis for
    * every track, exactly as before this option existed.
+   *
+   * Deliberately trusted as-is when provided: if `filePath` doesn't
+   * exist, `readRawDatabaseV2Records` throws and the burn fails loudly --
+   * same "explicit input, fail loudly rather than silently substitute
+   * something else" posture as `writeDatabaseV2`'s existing-file refusal
+   * and the path-safety checks elsewhere in this codebase (decision 16).
+   * A caller that wants a soft, "use this if it happens to be there"
+   * default (the desktop app's Phase 3b UI wiring does) is expected to
+   * check for the file itself before ever setting this option -- that
+   * policy belongs at the app layer, not here, the same way the
+   * track-index cache's file path is computed by `registerIpc.ts` rather
+   * than this package (decision 20).
    */
-  sourceDatabaseV2?: {
-    /** Path to the source `database V2` file. Read-only -- never modified. */
-    filePath: string;
-    /** volumeRoot the source file's own `pfil` paths resolve against (i.e. the parent of ITS `_Serato_`, not necessarily the burn destination's). */
-    volumeRoot: string;
-  };
+  sourceDatabaseV2?: DatabaseV2Source;
 }
 
 export interface BurnVerification {
@@ -142,6 +165,17 @@ export interface BurnReport {
   organizeReport: OrganizeReport;
   crateWriteResult: CrateWriteResult;
   databaseV2: DatabaseV2BurnOutcome;
+  /**
+   * Echoes back exactly what `options.sourceDatabaseV2` was for this
+   * burn -- `null` when the caller didn't supply one (every track fell
+   * back to the minimal `pfil`+`ttyp` synthesis). Exists so a caller that
+   * applies its own default (e.g. the desktop app's Phase 3b UI, which
+   * only sets `sourceDatabaseV2` when its expected backup path actually
+   * exists -- see `BurnOptions.sourceDatabaseV2`'s doc) can show the user
+   * which file was actually used, or that none was found, rather than
+   * the UI having to assume its own default silently applied.
+   */
+  sourceDatabaseV2Used: DatabaseV2Source | null;
   verification: BurnVerification;
   completedAt: string;
 }
@@ -217,6 +251,7 @@ export async function burnToFlash(
     organizeReport,
     crateWriteResult,
     databaseV2,
+    sourceDatabaseV2Used: options.sourceDatabaseV2 ?? null,
     verification,
     completedAt: new Date().toISOString(),
   };
