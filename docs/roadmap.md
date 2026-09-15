@@ -386,16 +386,28 @@ Deliverables, in build order:
    **Still open**: the actual hardware validation burn using this
    feature end-to-end — not started, deliberately not blocking this
    deliverable (see the phase's testing note below).
+8. **Burn progress tracker — done, 2026-09-15** (`docs/decisions.md`
+   same-day entry): a burn now reports live progress the same way a scan
+   does, via a new `BurnProgress`/`BurnPhase` type and a shared
+   `burn:progress` IPC channel — direct James feedback after Deliverable
+   7 shipped ("the single spinner is a little ambiguous"). Five phases
+   (`diffing`, `copying`, `writingCrates`, `writingDatabaseV2`,
+   `verifying`), the first two itemized per-track with a running
+   `processed`/`total`, the last three single-shot. `core` suite: 112
+   tests (up from 108, +4), clean rebuild; `desktop`'s
+   `ipcHandlers.test.ts`: 16 tests (+2), clean typecheck on
+   main/preload/shared, plus a renderer stub-proxy typecheck for the new
+   `BurnProgressBar` component.
 
 Testing: same posture as Phase 2 — unit tests against synthetic trees,
 property-based round-trip testing, nothing near James's real
 `E:\_Serato_` at any point except read-only inspection to diagnose
 Deliverable 6 (never written to). Real-hardware confirmation
-(Deliverable 5), its follow-up fix (Deliverable 6), and the UI wiring
-(Deliverable 7) are not a substitute for the automated suite that came
-before them — and the phase's real final step is still ahead: a
-hardware validation burn using Deliverable 7's actual desktop UI
-end-to-end, not yet started.
+(Deliverable 5), its follow-up fix (Deliverable 6), the UI wiring
+(Deliverable 7), and the progress tracker (Deliverable 8) are not a
+substitute for the automated suite that came before them — and the
+phase's real final step is still ahead: a hardware validation burn using
+the actual desktop UI end-to-end, not yet started.
 
 ## Phase 4 — Opt-in live migration (highest risk, latest, explicitly gated)
 
@@ -447,18 +459,75 @@ docs/decisions.md's 2026-09-10 entry. Not yet wired into IPC/UI —
 core-only so far, same pattern the Serato readers followed before the
 desktop app caught up.
 
-Write-side has a decision pending (task #22): template-modify a real,
-valid export by appending new pages to its existing table chains
-(favored — produces a portable USB export symmetric with Serato's
-burn-to-flash, needs no Rekordbox installation), versus rekordbox XML (an
-official interchange format, but with real limits — no MyTags, no memory
-cue colors, no loop data, can't express deletions). Notably, rekordbox
-XML is literally how Lexicon syncs to older Rekordbox versions per its
-own documentation — and Lexicon's own docs say it moved to a different,
-more direct method for modern Rekordbox, which by elimination means
-touching Rekordbox's live local database. That's explicitly not a path
-this project is taking, for the same reason Serato's live database stays
-untouched until Phase 4: it's the thing someone actually depends on.
+**Write-side strategy: decided, 2026-09-15 (task #22 resolved — see
+docs/decisions.md).** Template-modify a real, already-Rekordbox-exported
+drive by appending new rows/pages to its existing table chains — never
+rekordbox XML (an official interchange format, but with real limits: no
+MyTags, no memory cue colors, no loop data, can't express deletions; and
+it's literally how Lexicon syncs to *older* Rekordbox versions, per
+Lexicon's own docs, which also say it moved to a different, more direct
+method for modern Rekordbox — by elimination, touching Rekordbox's live
+local database, which is explicitly not a path this project takes, same
+reason Serato's live database stays untouched until Phase 4). Confirmed
+with James: this means burn-to-Rekordbox always requires a drive that's
+already been exported once by real Rekordbox — it cannot originate a
+Rekordbox-readable drive from a totally blank one, unlike Serato's burn.
+Accepted as the right tradeoff given there's no CDJ hardware to validate
+a from-scratch writer against.
+
+**Implementation: wrap `fragmede/rekordbox-pdb`'s `PdbEditor` rather than
+build our own writer.** A GitHub survey (2026-09-15) found this
+MIT-licensed, dependency-free Python library — already trusted as this
+project's independent read-oracle, decision 23 — has a write path doing
+exactly the agreed strategy: its own README describes it as editing "an
+`export.pdb` the way rekordbox itself does — surgical, incremental
+changes rather than rewriting the file," handling the row/page mechanics
+(heap allocation, the row directory growing down from the page end,
+presence/written bitmasks, >255-slot count encoding, fresh-page
+allocation) that would otherwise be new reverse-engineering work with no
+hardware to check it against. James's call: shell out to it as the
+actual write mechanism rather than reimplementing it in TypeScript — real
+speed/risk win, at the cost of a Python dependency in an otherwise
+all-Node/Electron stack (packaging implication flagged below, not yet
+resolved). Two other candidates surveyed and ruled out: `Holzhaus/rekordcrate`
+(Rust) is read-only and pre-1.0 with an explicit "heavy development,
+breaking changes" warning; `Deep-Symmetry/crate-digger` (Java) is
+read-only. One real caveat carried forward from `PdbEditor`'s own docs:
+it doesn't generate ANLZ analysis files, so an appended track still needs
+Rekordbox/CDJ to analyze it before waveforms/beatgrids exist — an
+inherent limit of this approach, not a bug to fix, and worth setting
+expectations on up front (distinct from Serato's re-analysis
+*regression*, decision 27, which was avoidable and got fixed).
+
+Deliverables, in build order (none started):
+1. Vendor `PdbEditor` (reviewed copy, with attribution/license kept
+   intact) and confirm it runs standalone against the real reference USB
+   James connected this session (`F:\PIONEER\rekordbox\export.pdb`, a
+   genuine hardware-burned stick).
+2. A thin main-process wrapper (`packages/core` or a dedicated adapter)
+   that spawns the vendored script as a child process with a diffed set
+   of items to add, capturing success/failure — same
+   dependency-injection shape as every other handler in this project
+   (the Python executable/script path passed in, not hardcoded, so tests
+   can point it at a stub).
+3. A `burnToRekordbox`-style orchestrator, parallel to
+   `serato/burnToFlash.ts`: diff the canonical tree against what the
+   *already-built* Rekordbox reader (`pdbReader.ts`/`canonicalTree.ts`)
+   finds in the template's current `export.pdb`, using the same
+   `TrackIndexStore` content-hash approach Serato's diff already uses —
+   only the row-writing step delegates to `PdbEditor`, everything else
+   stays this project's own TS code.
+4. Read-back verification using this project's own already-validated
+   reader (never trusting the writer's own success signal alone) — same
+   posture as `verifyBurn`.
+5. Hardware-adjacent trust gate, honest about the ceiling (decision 22
+   applies here too, doubly so since this is someone else's write code):
+   open a modified stick in real Rekordbox software and confirm by eye,
+   since CDJ hardware isn't available.
+6. Not blocking v1, but real: resolve how a Python runtime reaches a
+   friend's machine before this ships beyond James's own — bundling a
+   frozen executable per platform, versus requiring system Python for
+   now while this stays single-user.
 
 ## Phase 6 — Beyond porting: library management features
 
