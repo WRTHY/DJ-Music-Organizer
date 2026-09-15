@@ -4,6 +4,7 @@ import {
   BurnProgress,
   BurnReport,
   CanonicalTree,
+  DEFAULT_SOURCE_DATABASE_V2,
   DiffSummary,
   OrganizePlan,
   OrganizeReport,
@@ -518,6 +519,13 @@ export default function App() {
             disabled={burnTargetSameAsTargetRoot}
           />
 
+          <p className={styles.subtitle}>
+            Carrying forward analysis data from an already-analyzed library, so Serato doesn't need
+            to re-analyze every track on the burned drive: <code>{DEFAULT_SOURCE_DATABASE_V2.filePath}</code>.
+            Read-only for now — deliberately your library backup, never your live <code>E:\_Serato_</code>
+            (see docs/decisions.md, 2026-09-14). Skipped automatically if that backup isn't present.
+          </p>
+
           <div className={styles.actions}>
             <Button
               onClick={handleDiffBurn}
@@ -561,6 +569,24 @@ export default function App() {
                     `${burnReport.verification.misplacedTrackIds.length} in the wrong crate. Don't disconnect the ` +
                     'drive — see docs/roadmap.md\u2019s Phase 3 failure-injection notes before retrying.'}
               </p>
+              {burnReport.databaseV2.written && (
+                <p className={styles.subtitle}>
+                  database V2: {burnReport.databaseV2.trackCount} track(s) indexed,{' '}
+                  {burnReport.databaseV2.preservedCount} carried forward from prior analysis
+                  {burnReport.databaseV2.preservedCount < burnReport.databaseV2.trackCount &&
+                    ` -- the other ${
+                      burnReport.databaseV2.trackCount - burnReport.databaseV2.preservedCount
+                    } will need Serato to analyze them at least once.`}
+                  {burnReport.sourceDatabaseV2Used === null && burnReport.databaseV2.preservedCount === 0 && (
+                    <>
+                      {' '}
+                      No already-analyzed database was found at{' '}
+                      <code>{DEFAULT_SOURCE_DATABASE_V2.filePath}</code> -- confirm it still exists if
+                      that's unexpected.
+                    </>
+                  )}
+                </p>
+              )}
               <ul className={styles.reportList}>
                 {Object.entries(burnReport.organizeReport.summary).map(([status, count]) => (
                   <li key={status}>

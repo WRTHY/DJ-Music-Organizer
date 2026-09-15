@@ -19,6 +19,12 @@ export type {
   ScanProgress,
 } from '../../shared/ipcContract';
 
+// A value (not a type), so re-exported separately from the block above --
+// the renderer displays this exact constant read-only on the "Burn to
+// flash" card rather than hardcoding its own copy of the path. See its
+// doc in ipcContract.ts for why this stays a single shared constant.
+export { DEFAULT_SOURCE_DATABASE_V2 } from '../../shared/ipcContract';
+
 export function selectFolder() {
   return window.mlo.selectFolder();
 }

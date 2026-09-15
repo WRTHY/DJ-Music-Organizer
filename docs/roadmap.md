@@ -386,28 +386,16 @@ Deliverables, in build order:
    **Still open**: the actual hardware validation burn using this
    feature end-to-end — not started, deliberately not blocking this
    deliverable (see the phase's testing note below).
-8. **Burn progress tracker — done, 2026-09-15** (`docs/decisions.md`
-   same-day entry): a burn now reports live progress the same way a scan
-   does, via a new `BurnProgress`/`BurnPhase` type and a shared
-   `burn:progress` IPC channel — direct James feedback after Deliverable
-   7 shipped ("the single spinner is a little ambiguous"). Five phases
-   (`diffing`, `copying`, `writingCrates`, `writingDatabaseV2`,
-   `verifying`), the first two itemized per-track with a running
-   `processed`/`total`, the last three single-shot. `core` suite: 112
-   tests (up from 108, +4), clean rebuild; `desktop`'s
-   `ipcHandlers.test.ts`: 16 tests (+2), clean typecheck on
-   main/preload/shared, plus a renderer stub-proxy typecheck for the new
-   `BurnProgressBar` component.
 
 Testing: same posture as Phase 2 — unit tests against synthetic trees,
 property-based round-trip testing, nothing near James's real
 `E:\_Serato_` at any point except read-only inspection to diagnose
 Deliverable 6 (never written to). Real-hardware confirmation
-(Deliverable 5), its follow-up fix (Deliverable 6), the UI wiring
-(Deliverable 7), and the progress tracker (Deliverable 8) are not a
-substitute for the automated suite that came before them — and the
-phase's real final step is still ahead: a hardware validation burn using
-the actual desktop UI end-to-end, not yet started.
+(Deliverable 5), its follow-up fix (Deliverable 6), and the UI wiring
+(Deliverable 7) are not a substitute for the automated suite that came
+before them — and the phase's real final step is still ahead: a
+hardware validation burn using Deliverable 7's actual desktop UI
+end-to-end, not yet started.
 
 ## Phase 4 — Opt-in live migration (highest risk, latest, explicitly gated)
 
