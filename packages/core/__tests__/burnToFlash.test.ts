@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { CanonicalNode, CanonicalTree, TrackRef, allTracks, emptyNode } from '../src/types';
+import { BurnProgress, CanonicalNode, CanonicalTree, TrackRef, allTracks, emptyNode } from '../src/types';
 import { idForPath } from '../src/serato/hash';
 import { burnToFlash, diffTrackPlacement } from '../src/serato/burnToFlash';
 import { DATABASE_V2_FILENAME } from '../src/serato/databaseV2Writer';
@@ -282,6 +282,78 @@ describe('burnToFlash', () => {
     const tracksStill = allTracks(tree);
     expect(tracksStill).toHaveLength(1);
     expect(tracksStill[0].track.sourcePath).toBe(houseTrack);
+  });
+
+  /**
+   * Phase 3b burn progress (docs/decisions.md, 2026-09-14 -- "the single
+   * spinner is a little ambiguous"). `onProgress` composes the itemized
+   * events from `diffAgainstDestination`/`executePlan` with three
+   * single-shot events `burnToFlash` fires itself around the crate
+   * write, the database V2 write, and verification -- this is the one
+   * test that proves the full sequence actually comes through in the
+   * right order end to end, since the two lower-level pieces are only
+   * ever tested individually (organizer/diff.test.ts).
+   */
+  it('onProgress reports every phase, in order, with the itemized phases carrying an accurate total', async () => {
+    const houseTrack = path.join(sourceDir, 'house1.mp3');
+    const technoTrack = path.join(sourceDir, 'techno1.mp3');
+    await fs.writeFile(houseTrack, 'house content');
+    await fs.writeFile(technoTrack, 'techno content');
+
+    const tree = treeOf(
+      node('', [], [], [
+        node('House', ['House'], [track(houseTrack)]),
+        node('Techno', ['Techno'], [track(technoTrack)]),
+      ])
+    );
+
+    const events: BurnProgress[] = [];
+    await burnToFlash(tree, volumeDir, { store, onProgress: (p) => events.push(p) });
+
+    // Phase order: two 'diffing' events (one per track), then two
+    // 'copying' events, then one each of the three single-shot phases --
+    // never interleaved, and never missing.
+    expect(events.map((e) => e.phase)).toEqual([
+      'diffing',
+      'diffing',
+      'copying',
+      'copying',
+      'writingCrates',
+      'writingDatabaseV2',
+      'verifying',
+    ]);
+
+    const diffingEvents = events.filter((e) => e.phase === 'diffing');
+    expect(diffingEvents.every((e) => e.total === 2)).toBe(true);
+    expect(diffingEvents.map((e) => e.processed)).toEqual([1, 2]);
+
+    const copyingEvents = events.filter((e) => e.phase === 'copying');
+    expect(copyingEvents.every((e) => e.total === 2)).toBe(true);
+    expect(copyingEvents.map((e) => e.processed)).toEqual([1, 2]);
+
+    const singleShotEvents = events.filter((e) => e.phase !== 'diffing' && e.phase !== 'copying');
+    expect(singleShotEvents.every((e) => e.processed === 0 && e.total === undefined)).toBe(true);
+  });
+
+  it('a second burn with nothing new to copy still reports a diffing event, but no copying events', async () => {
+    const houseTrack = path.join(sourceDir, 'house1.mp3');
+    await fs.writeFile(houseTrack, 'house content');
+    const tree = treeOf(node('House', ['House'], [track(houseTrack)]));
+
+    await burnToFlash(tree, volumeDir, { store });
+
+    const events: BurnProgress[] = [];
+    await burnToFlash(tree, volumeDir, { store, onProgress: (p) => events.push(p) });
+
+    // diffAgainstDestination still classifies (and reports) every track in
+    // the plan regardless of status -- it's executePlan's plan that's
+    // empty, since planFromDiff drops 'unchanged' items before executePlan
+    // ever sees them (see organizer/diff.ts). So the second burn still
+    // gets one 'diffing' event for the one (now-unchanged) track, zero
+    // 'copying' events, and the three single-shot phases still fire --
+    // writing crates/database V2/verifying always happens regardless of
+    // whether anything was actually copied.
+    expect(events.map((e) => e.phase)).toEqual(['diffing', 'writingCrates', 'writingDatabaseV2', 'verifying']);
   });
 
   it('handles nested crate hierarchies, matching the same "%%" convention as the writer', async () => {

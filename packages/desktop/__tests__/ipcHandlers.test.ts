@@ -120,6 +120,27 @@ describe('diffBurn / burn', () => {
     await fs.rm(burnTarget, { recursive: true, force: true });
   });
 
+  /**
+   * Phase 3b burn progress (docs/decisions.md, 2026-09-14). Just proves
+   * this handler is a real pass-through of the optional callback -- same
+   * shape as the "forwards scan progress" test above -- not a re-test of
+   * what events actually get fired (that's @mlo/core's own job, see
+   * organizer/diff.test.ts and burnToFlash.test.ts).
+   */
+  it('diffBurn forwards progress through the optional onProgress callback', async () => {
+    const tree = await scanFolderTree(sourceRoot);
+    const events: unknown[] = [];
+    await diffBurn({ tree, targetRoot: burnTarget }, storePath, (p) => events.push(p));
+    expect(events.length).toBeGreaterThan(0);
+  });
+
+  it('burn forwards progress through the optional onProgress callback', async () => {
+    const tree = await scanFolderTree(sourceRoot);
+    const events: unknown[] = [];
+    await burn({ tree, targetRoot: burnTarget }, storePath, undefined, (p) => events.push(p));
+    expect(events.length).toBeGreaterThan(0);
+  });
+
   it('diffBurn reports what would happen without writing anything', async () => {
     const tree = await scanFolderTree(sourceRoot);
     const summary = await diffBurn({ tree, targetRoot: burnTarget }, storePath);

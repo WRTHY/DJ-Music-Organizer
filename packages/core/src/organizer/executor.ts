@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { BurnProgressCallback } from '../types';
 import { OrganizePlan, OrganizePlanItem } from './planner';
 
 export type OrganizeItemStatus = 'copied' | 'moved' | 'skipped-duplicate' | 'renamed' | 'overwritten' | 'error';
@@ -44,6 +45,14 @@ export interface ExecuteOptions {
    * the source (that stays `skipped-duplicate` either way).
    */
   allowOverwrite?: boolean;
+  /**
+   * Fires once per item executed, phase always 'copying' (Phase 3b burn
+   * progress, docs/decisions.md 2026-09-14) -- part of `options` rather
+   * than a trailing positional parameter like `diffAgainstDestination`'s
+   * `onProgress`, since this function already takes an options object
+   * and every existing call site passes one.
+   */
+  onProgress?: BurnProgressCallback;
 }
 
 /**
@@ -68,6 +77,12 @@ export async function executePlan(
 
   for (const item of plan.items) {
     results.push(await executeItem(item, dryRun, allowOverwrite));
+    options.onProgress?.({
+      phase: 'copying',
+      current: item.sourcePath,
+      processed: results.length,
+      total: plan.items.length,
+    });
   }
 
   const summary = results.reduce<Record<OrganizeItemStatus, number>>(

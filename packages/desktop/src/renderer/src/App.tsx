@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  BurnPhase,
+  BurnProgress,
   BurnReport,
   CanonicalTree,
   DiffSummary,
@@ -65,6 +67,41 @@ function topLevelKeys(root: CanonicalTree['root']): Set<string> {
 }
 
 const MAX_SHOWN_FAILURES = 8;
+
+// Friendly labels for BurnProgress.phase (Phase 3b, docs/decisions.md,
+// 2026-09-14 -- "the single spinner is a little ambiguous"). A plain
+// lookup object rather than a switch: every BurnPhase value is required
+// to have an entry, so TypeScript itself catches a label going missing
+// if @mlo/core ever adds a new phase -- the same anti-drift reasoning as
+// this file's other shared-contract imports.
+const BURN_PHASE_LABELS: Record<BurnPhase, string> = {
+  diffing: 'Comparing',
+  copying: 'Copying',
+  writingCrates: 'Writing crate database',
+  writingDatabaseV2: 'Writing database V2',
+  verifying: 'Verifying',
+};
+
+// Renders whatever BurnProgress last reported, for both "Preview burn"
+// (diffing only) and the real "Burn" (all five phases) -- one shared
+// component since both actions light up the same progress area and a
+// listener tells the phases apart by `progress.phase` already. The two
+// itemized phases (diffing/copying) show a real fraction, matching the
+// scan ProgressBar above; the three single-shot phases show just the
+// phase label with an indeterminate bar, since there's no per-item count
+// to report for a single crate-database write or a single read-back.
+function BurnProgressBar({ progress }: { progress: BurnProgress }) {
+  const label = progress.current
+    ? `${BURN_PHASE_LABELS[progress.phase]}: ${progress.current}`
+    : `${BURN_PHASE_LABELS[progress.phase]}…`;
+  return (
+    <ProgressBar
+      label={label}
+      detail={progress.total ? `${progress.processed} / ${progress.total} tracks` : undefined}
+      fraction={progress.total ? progress.processed / progress.total : undefined}
+    />
+  );
+}
 
 // Both the plain copy flow's execution report and the burn flow's report
 // wrap the same OrganizeReport shape, and both were only ever showing the
@@ -153,11 +190,14 @@ export default function App() {
   const [loadingAction, setLoadingAction] = useState<ActionKey | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
+  const [burnProgress, setBurnProgress] = useState<BurnProgress | null>(null);
 
-  // Subscribed for the app's lifetime, not just while a scan is running --
-  // there's no harm in an idle listener, and it avoids a subscribe/
-  // unsubscribe dance racing against handleScan's own state updates.
+  // Subscribed for the app's lifetime, not just while a scan/burn is
+  // running -- there's no harm in an idle listener, and it avoids a
+  // subscribe/unsubscribe dance racing against handleScan/handleDiffBurn/
+  // handleBurn's own state updates.
   useEffect(() => window.mlo.onScanProgress(setScanProgress), []);
+  useEffect(() => window.mlo.onBurnProgress(setBurnProgress), []);
 
   const trackCount = useMemo(() => (tree ? countTracks(tree) : 0), [tree]);
   const selectedCount = useMemo(
@@ -235,8 +275,9 @@ export default function App() {
       setReport
     );
 
-  const handleDiffBurn = () =>
-    run(
+  const handleDiffBurn = () => {
+    setBurnProgress(null);
+    return run(
       'diffBurn',
       () => {
         if (!tree) throw new Error('Scan a library first.');
@@ -248,9 +289,11 @@ export default function App() {
         setBurnReport(null);
       }
     );
+  };
 
-  const handleBurn = () =>
-    run(
+  const handleBurn = () => {
+    setBurnProgress(null);
+    return run(
       'burn',
       () => {
         if (!tree) throw new Error('Scan a library first.');
@@ -262,6 +305,7 @@ export default function App() {
         setDiffSummary(result.diffSummary);
       }
     );
+  };
 
   return (
     <main className={styles.main}>
@@ -491,6 +535,10 @@ export default function App() {
               {loadingAction === 'burn' ? 'Burning…' : 'Burn'}
             </Button>
           </div>
+
+          {(loadingAction === 'diffBurn' || loadingAction === 'burn') && burnProgress && (
+            <BurnProgressBar progress={burnProgress} />
+          )}
 
           {diffSummary && (
             <p>

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
-import { IPC_CHANNELS, MloApi, ScanProgress } from '../shared/ipcContract';
+import { BurnProgress, IPC_CHANNELS, MloApi, ScanProgress } from '../shared/ipcContract';
 
 /**
  * The renderer's entire view of the outside world. `contextIsolation:
@@ -28,6 +28,11 @@ const api: MloApi = {
   executeOrganize: (args) => ipcRenderer.invoke(IPC_CHANNELS.executeOrganize, args),
   diffBurn: (args) => ipcRenderer.invoke(IPC_CHANNELS.diffBurn, args),
   burn: (args) => ipcRenderer.invoke(IPC_CHANNELS.burn, args),
+  onBurnProgress: (callback) => {
+    const listener = (_event: IpcRendererEvent, progress: BurnProgress) => callback(progress);
+    ipcRenderer.on(IPC_CHANNELS.burnProgress, listener);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.burnProgress, listener);
+  },
 };
 
 contextBridge.exposeInMainWorld('mlo', api);

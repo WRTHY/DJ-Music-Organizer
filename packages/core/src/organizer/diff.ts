@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { CanonicalNode, CanonicalTree, TrackRef } from '../types';
+import { BurnProgressCallback, CanonicalNode, CanonicalTree, TrackRef } from '../types';
 import { TrackIndexStore, hashWithCache } from '../trackIndex';
 // idForPath is a plain sha1-of-absolute-path helper that happens to live
 // under serato/ historically (see docs/decisions.md, "Phase 3, burn
@@ -57,12 +57,19 @@ export interface DiffSummary {
  * previously-hashed, unchanged file is not re-read from disk on every
  * diff -- only a file whose size or mtime has actually changed since it
  * was last hashed costs a real read.
+ *
+ * `onProgress`, when given, fires once per item classified (Phase 3b
+ * burn progress, docs/decisions.md 2026-09-14) -- same optional-callback
+ * dependency-injection shape as `readFolderTree`/`readCrateDatabase`'s
+ * `onProgress`. `total` is always known here (the plan's item count is
+ * computed up front), unlike a folder-tree scan.
  */
 export async function diffAgainstDestination(
   tree: CanonicalTree,
   targetRoot: string,
   store: TrackIndexStore,
-  mode: OrganizeMode = 'copy'
+  mode: OrganizeMode = 'copy',
+  onProgress?: BurnProgressCallback
 ): Promise<OrganizeDiff> {
   const plan = planFromCanonicalTree(tree, targetRoot, mode);
 
@@ -74,6 +81,12 @@ export async function diffAgainstDestination(
       sourcePath: planItem.sourcePath,
       targetPath: planItem.targetPath,
       status,
+    });
+    onProgress?.({
+      phase: 'diffing',
+      current: planItem.sourcePath,
+      processed: items.length,
+      total: plan.items.length,
     });
   }
 

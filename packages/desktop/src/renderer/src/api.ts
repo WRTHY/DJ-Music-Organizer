@@ -5,6 +5,8 @@
 import type { CanonicalTree, OrganizeMode, OrganizePlan } from '../../shared/ipcContract';
 
 export type {
+  BurnPhase,
+  BurnProgress,
   BurnReport,
   CanonicalNode,
   CanonicalTree,

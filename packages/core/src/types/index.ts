@@ -57,6 +57,43 @@ export interface ScanProgress {
 
 export type ScanProgressCallback = (progress: ScanProgress) => void;
 
+/**
+ * Progress reported mid-burn (Phase 3b, docs/roadmap.md, "burn progress
+ * tracker" -- James, 2026-09-14: the single "Burning..." spinner was
+ * ambiguous about whether anything was actually happening). Deliberately
+ * NOT reusing `ScanProgress` even though the shape looks similar: a scan
+ * is one loop over one kind of unit (folders, or crates), but a burn is
+ * several genuinely different phases in sequence -- diffing, copying,
+ * writing the crate database, writing `database V2`, verifying -- and
+ * only two of those (diffing, copying) are itemized per-track the way a
+ * scan is. Folding that into `ScanProgress` would mean either a fake
+ * "current folder" for phases that have no per-item concept, or a type
+ * where half the fields are meaningless depending on context; a distinct
+ * type keeps every field honest about when it applies.
+ *
+ * `current`/`total` are only ever set during the two itemized phases
+ * ('diffing', 'copying') -- one event per track, mirroring exactly how
+ * `ScanProgress`/`readFolderTree` report one event per folder. The three
+ * single-shot phases ('writingCrates', 'writingDatabaseV2', 'verifying')
+ * fire exactly once each, with `processed: 0` and no `total` -- there's
+ * no meaningful sub-progress within them (they're comparatively fast,
+ * generated-file writes/reads), but firing an event on entry still lets
+ * the UI update its label so a burn doesn't look stuck during the
+ * (usually brief) time spent there after copying finishes.
+ */
+export type BurnPhase = 'diffing' | 'copying' | 'writingCrates' | 'writingDatabaseV2' | 'verifying';
+
+export interface BurnProgress {
+  phase: BurnPhase;
+  /** The track path currently being diffed/copied. Only set during 'diffing'/'copying'. */
+  current?: string;
+  processed: number;
+  /** Only known during 'diffing'/'copying' -- both operate over a plan whose item count is known up front. */
+  total?: number;
+}
+
+export type BurnProgressCallback = (progress: BurnProgress) => void;
+
 export function emptyNode(name: string, path: string[]): CanonicalNode {
   return { name, path, children: [], tracks: [] };
 }

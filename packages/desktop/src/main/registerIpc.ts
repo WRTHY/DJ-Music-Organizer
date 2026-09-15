@@ -3,6 +3,8 @@ import path from 'node:path';
 import { IPC_CHANNELS } from '../shared/ipcContract';
 import type {
   BurnArgs,
+  BurnExecuteArgs,
+  BurnProgress,
   ExecuteOrganizeArgs,
   PlanOrganizeArgs,
   ScanCrateDatabaseArgs,
@@ -60,11 +62,15 @@ export function registerIpc(window: BrowserWindow): void {
     return handlers.executeOrganize(args);
   });
 
-  ipcMain.handle(IPC_CHANNELS.diffBurn, async (_event, args: BurnArgs) => {
-    return handlers.diffBurn(args, trackIndexStorePath);
+  ipcMain.handle(IPC_CHANNELS.diffBurn, async (event, args: BurnArgs) => {
+    return handlers.diffBurn(args, trackIndexStorePath, (progress: BurnProgress) => {
+      event.sender.send(IPC_CHANNELS.burnProgress, progress);
+    });
   });
 
-  ipcMain.handle(IPC_CHANNELS.burn, async (_event, args: BurnArgs) => {
-    return handlers.burn(args, trackIndexStorePath);
+  ipcMain.handle(IPC_CHANNELS.burn, async (event, args: BurnExecuteArgs) => {
+    return handlers.burn(args, trackIndexStorePath, undefined, (progress: BurnProgress) => {
+      event.sender.send(IPC_CHANNELS.burnProgress, progress);
+    });
   });
 }

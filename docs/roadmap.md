@@ -359,19 +359,55 @@ Deliverables, in build order:
    `burnToFlash.ts`. `core` suite: 108 tests (up from 99), clean
    typecheck, plus a direct smoke test against James's real, live
    11,991-track `database V2`.
-   **Still open**: which file to actually pass as `sourceDatabaseV2` for
-   a real burn (the live `E:\_Serato_\database V2` vs. the
-   `E:\LIBRARY BACKUP 9_10_2026\_Serato_` copy) — a real design/UX
-   question, unresolved. This is a core-only capability for now; no
-   desktop UI wiring yet (that's separate, not-yet-started Phase 3b UI
-   work).
+   **Resolved by Deliverable 7 below**: which file to pass as
+   `sourceDatabaseV2` for a real burn, and the desktop UI wiring itself.
+7. **UI wiring — done, 2026-09-14** (`docs/decisions.md` same-day entry):
+   `sourceDatabaseV2` threaded through the shared IPC contract
+   (`BurnExecuteArgs`, `burn`-channel-only — `diffBurn` never touches
+   `database V2` at all), `main/ipcHandlers.ts`, and `registerIpc.ts`.
+   Resolved Deliverable 6's open question: a real burn from the desktop
+   app defaults to James's library backup
+   (`E:\LIBRARY BACKUP 9_10_2026\_Serato_\database V2`), never his live
+   `E:\_Serato_\database V2` — applied only when that backup file
+   actually exists, so a machine without it still burns fine with the
+   ordinary minimal synthesis rather than failing. UI is read-only for
+   now (a fixed informational line on the "Burn to flash" card, not an
+   editable field) — deliberate, matching this phase's risk-tiered
+   posture; the IPC plumbing accepts a caller override already, so
+   making it editable later is a UI-only change. The burn report now
+   also surfaces `preservedCount` vs. `trackCount` (the "will this
+   trigger re-analysis" signal) and warns if no already-analyzed source
+   was found. `core` suite unchanged at 108 (clean); `desktop`'s
+   `ipcHandlers.test.ts` suite: 13 tests (3 new), clean typecheck on
+   main/preload/shared. The renderer (`App.tsx`) change itself was only
+   verified with a lighter stub-based typecheck this session, not the
+   full `tsconfig.renderer.json` pass against the real component tree —
+   still worth James's own `npm run typecheck`.
+   **Still open**: the actual hardware validation burn using this
+   feature end-to-end — not started, deliberately not blocking this
+   deliverable (see the phase's testing note below).
+8. **Burn progress tracker — done, 2026-09-15** (`docs/decisions.md`
+   same-day entry): a burn now reports live progress the same way a scan
+   does, via a new `BurnProgress`/`BurnPhase` type and a shared
+   `burn:progress` IPC channel — direct James feedback after Deliverable
+   7 shipped ("the single spinner is a little ambiguous"). Five phases
+   (`diffing`, `copying`, `writingCrates`, `writingDatabaseV2`,
+   `verifying`), the first two itemized per-track with a running
+   `processed`/`total`, the last three single-shot. `core` suite: 112
+   tests (up from 108, +4), clean rebuild; `desktop`'s
+   `ipcHandlers.test.ts`: 16 tests (+2), clean typecheck on
+   main/preload/shared, plus a renderer stub-proxy typecheck for the new
+   `BurnProgressBar` component.
 
 Testing: same posture as Phase 2 — unit tests against synthetic trees,
 property-based round-trip testing, nothing near James's real
 `E:\_Serato_` at any point except read-only inspection to diagnose
 Deliverable 6 (never written to). Real-hardware confirmation
-(Deliverable 5) and its follow-up fix (Deliverable 6) are the final
-steps, not a substitute for the automated suite that came before them.
+(Deliverable 5), its follow-up fix (Deliverable 6), the UI wiring
+(Deliverable 7), and the progress tracker (Deliverable 8) are not a
+substitute for the automated suite that came before them — and the
+phase's real final step is still ahead: a hardware validation burn using
+the actual desktop UI end-to-end, not yet started.
 
 ## Phase 4 — Opt-in live migration (highest risk, latest, explicitly gated)
 

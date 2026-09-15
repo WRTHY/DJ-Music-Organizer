@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { CanonicalNode, CanonicalTree, TrackRef, emptyNode } from '../src/types';
+import { BurnProgress, CanonicalNode, CanonicalTree, TrackRef, emptyNode } from '../src/types';
 import { idForPath } from '../src/serato/hash';
 import { diffAgainstDestination, planFromDiff, summarizeDiff } from '../src/organizer/diff';
 import { executePlan } from '../src/organizer/executor';
@@ -112,6 +112,30 @@ describe('diffAgainstDestination', () => {
     const diff = await diffAgainstDestination(tree, targetDir, store);
     expect(summarizeDiff(diff)).toEqual({ new: 1, unchanged: 1, changed: 1 });
   });
+
+  /**
+   * Phase 3b burn progress (docs/decisions.md, 2026-09-14): `onProgress`
+   * fires once per item classified, phase always 'diffing', with a
+   * `total` known up front since the plan's item count is computed
+   * before the loop starts -- unlike `readFolderTree`'s progress, which
+   * can't know a folder count ahead of time.
+   */
+  it('onProgress fires once per item, phase "diffing", with an accurate running total', async () => {
+    const trackA = path.join(sourceDir, 'a.mp3');
+    const trackB = path.join(sourceDir, 'b.mp3');
+    await fs.writeFile(trackA, 'aaa');
+    await fs.writeFile(trackB, 'bbb');
+    const tree = treeOf(node('', [], [track(trackA), track(trackB)]));
+
+    const events: BurnProgress[] = [];
+    await diffAgainstDestination(tree, targetDir, store, 'copy', (p) => events.push(p));
+
+    expect(events).toHaveLength(2);
+    expect(events.every((e) => e.phase === 'diffing')).toBe(true);
+    expect(events.every((e) => e.total === 2)).toBe(true);
+    expect(events.map((e) => e.processed)).toEqual([1, 2]);
+    expect(events.map((e) => e.current).sort()).toEqual([trackA, trackB].sort());
+  });
 });
 
 describe('planFromDiff', () => {
@@ -210,5 +234,30 @@ describe('diff + plan + execute, end to end', () => {
     expect(report.summary.renamed).toBe(0);
     const rewritten = await fs.readFile(path.join(targetDir, 'a.mp3'), 'utf8');
     expect(rewritten).toBe('content a, but different now');
+  });
+
+  /**
+   * Phase 3b burn progress (docs/decisions.md, 2026-09-14): `executePlan`'s
+   * `onProgress` fires once per item actually executed, phase always
+   * 'copying' -- same shape as diffAgainstDestination's own onProgress
+   * test above, just for the copy step instead of the classify step.
+   */
+  it('executePlan onProgress fires once per item, phase "copying"', async () => {
+    const trackA = path.join(sourceDir, 'a.mp3');
+    const trackB = path.join(sourceDir, 'b.mp3');
+    await fs.writeFile(trackA, 'content a');
+    await fs.writeFile(trackB, 'content b');
+    const tree = treeOf(node('', [], [track(trackA), track(trackB)]));
+
+    const diff = await diffAgainstDestination(tree, targetDir, store);
+    const plan = planFromDiff(diff);
+
+    const events: BurnProgress[] = [];
+    await executePlan(plan, { onProgress: (p) => events.push(p) });
+
+    expect(events).toHaveLength(2);
+    expect(events.every((e) => e.phase === 'copying')).toBe(true);
+    expect(events.every((e) => e.total === 2)).toBe(true);
+    expect(events.map((e) => e.processed)).toEqual([1, 2]);
   });
 });
