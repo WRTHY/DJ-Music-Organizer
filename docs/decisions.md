@@ -2,6 +2,19 @@
 
 Lightweight ADR-style log of the choices behind this project. Newest first.
 
+## 2026-09-15 — Phase 5 Deliverable 1: `rekordbox-pdb` vendored and validated against the real reference USB
+
+First concrete step on decision 30's plan. `vendor/rekordbox-pdb/` now holds a pinned, unmodified copy of `fragmede/rekordbox-pdb` at commit `ee3bac2f22ca11a5ce61eea35f8cb951c246eaef` (LICENSE, README, FORMAT.md, `pyproject.toml`, the full `src/rekordbox_pdb/` package, and its own test suite + fixtures) — attribution, pin, and the reasoning for wrapping rather than reimplementing are all recorded in a new `vendor/rekordbox-pdb/VENDORED.md`, kept out of the ordinary `packages/` npm workspace since it's Python, not this project's own code.
+
+Reviewed both source files before vendoring anything (`pdb.py`, 617 lines; `edit.py`, 502 lines) — the append logic matches its own module-doc claims: per-row heap allocation, the row directory growing down from the page end, presence/written bitmasks, the >255-slot count encoding, fresh-page allocation, and a write-generation stamp plus file-header sequence bump on every structural change. One incidental correction to earlier research: the library's own "prior art" section states `Holzhaus/rekordcrate` "includes write support" — at odds with what an earlier fetch of its README reported (read-only). Not investigated further since it doesn't change this project's decision (already committed to `PdbEditor`), but noted so the discrepancy isn't silently carried forward as fact.
+
+**Validated three ways before trusting it, not just read**:
+1. Its own test suite, run in this session's sandbox (no pip install needed — pure stdlib, so `PYTHONPATH=src pytest` was enough): **44 passed, 6 skipped** (the skipped ones need larger local fixtures not present in this checkout; they skip gracefully per its own design).
+2. Read James's real, hardware-burned reference USB (`F:\PIONEER\rekordbox\export.pdb`, staged read-only into this session, the actual drive on `F:\` never touched) with the vendored `Database.from_file`: 3,549 tracks, 431 playlist/folder nodes, 4,037 playlist entries, 80 My Tag entries in `exportExt.pdb` — an **exact match** to this project's own reader's counts for the same drive (decisions 21/23), confirming this is genuinely the same file already validated, not a coincidence.
+3. The real test that mattered: appended a track, a playlist, and a playlist entry to a **scratch copy** of that file with `PdbEditor`, saved, and re-read the result — the three new rows are present and correct, and all 3,549 original tracks are byte-identical to before. A full byte-level diff between the pre- and post-edit copies found only **355 of 2,408,448 bytes changed (0.015%)**, with the file staying the same total size — direct, real-data confirmation that this library's write path is genuinely surgical, not a hidden full rewrite, on the exact drive this project will eventually write to for real.
+
+**Deliberately not done here**: no orchestration code, no Node-side wrapper, no diffing against the canonical tree — this deliverable is "prove the dependency is trustworthy and get it into the repo," per decision 30's build order. Deliverables 2-6 (the thin wrapper, the `burnToRekordbox` orchestrator, read-back verification, the software-based trust gate, and the Python-packaging question) are still ahead, in that order.
+
 ## 2026-09-15 — Phase 5 task #22 resolved: Rekordbox write-side strategy is template-modify via a vendored library, not a from-scratch writer
 
 James asked to formally decide the Rekordbox write-side strategy that had been "leaning" one way since decisions 22-23 but never actually settled. Worked it the same way Phase 3's design got settled before any code (decision 17): laid out the real options, got his sign-off on each fork, then wrote it up.

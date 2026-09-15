@@ -499,11 +499,18 @@ inherent limit of this approach, not a bug to fix, and worth setting
 expectations on up front (distinct from Serato's re-analysis
 *regression*, decision 27, which was avoidable and got fixed).
 
-Deliverables, in build order (none started):
-1. Vendor `PdbEditor` (reviewed copy, with attribution/license kept
-   intact) and confirm it runs standalone against the real reference USB
-   James connected this session (`F:\PIONEER\rekordbox\export.pdb`, a
-   genuine hardware-burned stick).
+Deliverables, in build order:
+1. **Done, 2026-09-15** — vendored `PdbEditor` into `vendor/rekordbox-pdb/`
+   (pinned commit, MIT license and attribution kept intact, full writeup
+   in `docs/decisions.md`) and confirmed it standalone: its own 44-test
+   suite passes in this project's sandbox; it reads the real reference USB
+   James connected this session (`F:\PIONEER\rekordbox\export.pdb`) with
+   counts matching this project's own reader exactly (3,549 tracks, 431
+   playlist nodes, 4,037 entries); and a real append-track/append-playlist
+   edit against a scratch copy of that same file changed only 355 of
+   2,408,448 bytes (0.015%) with every original track untouched — direct
+   proof the write path is genuinely surgical, not a hidden rewrite. The
+   real `F:\` drive was never written to.
 2. A thin main-process wrapper (`packages/core` or a dedicated adapter)
    that spawns the vendored script as a child process with a diffed set
    of items to add, capturing success/failure — same
