@@ -537,16 +537,40 @@ Deliverables, in build order:
    this feature can build and verify in this project's sandbox today but
    cannot run for real on his machine until Python is installed — see
    `docs/decisions.md`.
-3. A `burnToRekordbox`-style orchestrator, parallel to
-   `serato/burnToFlash.ts`: diff the canonical tree against what the
-   *already-built* Rekordbox reader (`pdbReader.ts`/`canonicalTree.ts`)
-   finds in the template's current `export.pdb`, using the same
-   `TrackIndexStore` content-hash approach Serato's diff already uses —
-   only the row-writing step delegates to `PdbEditor`, everything else
-   stays this project's own TS code.
-4. Read-back verification using this project's own already-validated
-   reader (never trusting the writer's own success signal alone) — same
-   posture as `verifyBurn`.
+3. **Done, 2026-09-16** — `packages/core/src/rekordbox/burnToRekordbox.ts`,
+   the `burnToFlash`-parallel orchestrator: diffs the canonical tree
+   against what the template's `export.pdb` already has, purely by
+   content hash (never path or id, since neither is expected to agree
+   between the source library and a Rekordbox export), copies whatever's
+   genuinely new onto the drive, and calls Deliverable 2's
+   `writeRekordboxPdb` with the resulting batch of ops — only the
+   row-writing step delegates out, everything else is this project's own
+   TS code, exactly as decision 30 scoped it. Unlike Serato's burn (which
+   regenerates its entire crate database every time), this never
+   regenerates anything — template-modify means it only ever adds, so an
+   existing playlist/folder at a given path is reused by id rather than
+   recreated, a folder needing both a subfolder and direct tracks of its
+   own gets Rekordbox's `_FolderTracks` convention applied on write (not
+   just recognized on read), and a folder with nothing anywhere in its
+   own subtree gets no playlist at all — the same "empty subtree writes
+   nothing" property Serato's crate writer already has. Verified with 13
+   new tests: pure unit tests for the diff/op-planning logic (including a
+   real bug caught before it ever touched the vendored library — a track
+   whose copy fails must not leave a dangling op or an empty playlist
+   created just for it) plus two integration tests against the vendored
+   library's own fixture, one confirming a new track lands correctly
+   under a freshly-created nested playlist, the other confirming burning
+   the same library to the same drive twice adds nothing at all — the
+   Rekordbox-side analog of Serato's core "burning twice copies nothing"
+   property. `core` suite: 133 tests, up from 120; `desktop` unaffected
+   (16/16). Never writes to the template itself — always a distinct
+   output path, left for Deliverable 5's human-gated trust step to
+   eventually promote. Full write-up in `docs/decisions.md`.
+4. ~~Read-back verification~~ — effectively done as part of Deliverable 3
+   above (`RekordboxBurnVerification`, same "never trust the writer's own
+   success signal alone" posture as `verifyBurn`) rather than a separate
+   pass, since the orchestrator and its verification were designed
+   together from the start.
 5. Hardware-adjacent trust gate, honest about the ceiling (decision 22
    applies here too, doubly so since this is someone else's write code):
    open a modified stick in real Rekordbox software and confirm by eye,

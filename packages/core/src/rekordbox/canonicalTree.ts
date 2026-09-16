@@ -60,7 +60,13 @@ export interface RekordboxTreeResult extends CanonicalTree {
   orphanedEntryCount: number;
 }
 
-const FOLDER_TRACKS_PLAYLIST_NAME = '_FolderTracks';
+// Exported so burnToRekordbox.ts's write-side planning can recognize and
+// (re)create this same hidden convention -- reading it here and writing
+// it there must agree on the literal name, or a freshly-written
+// direct-tracks-under-a-folder playlist wouldn't fold back into its
+// parent on the next read, the same anti-drift reasoning as decision 23's
+// `SeratoSourceType` fix.
+export const FOLDER_TRACKS_PLAYLIST_NAME = '_FolderTracks';
 
 export function buildCanonicalTreeFromPlaylists(
   tracks: RekordboxTrack[],

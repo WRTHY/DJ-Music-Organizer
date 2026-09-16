@@ -94,6 +94,37 @@ export interface BurnProgress {
 
 export type BurnProgressCallback = (progress: BurnProgress) => void;
 
+/**
+ * Progress reported mid-burn for `rekordbox/burnToRekordbox.ts` (Phase 5
+ * Deliverable 3, docs/roadmap.md). Deliberately its own type rather than
+ * reusing `BurnPhase`/`BurnProgress` above, for the same reason those
+ * don't reuse `ScanProgress`: a Rekordbox burn's phases don't match
+ * Serato's one-for-one. There's no `writingCrates`/`writingDatabaseV2`
+ * split -- the template-modify strategy (decision 30) writes everything
+ * (new tracks, new/reused playlists, new playlist entries) in one
+ * `PdbEditor` session -- so the write side collapses to a single
+ * `writingPdb` phase instead of two. `diffing` and `copying` are shared
+ * phase *names* with Serato's `BurnPhase` (this burn also diffs by
+ * content hash and copies new audio files, via the same
+ * `TrackIndexStore`/`executePlan` machinery) but are a genuinely
+ * different type -- a Rekordbox burn's `copying` only ever includes
+ * tracks classified `new` against the *template's own* existing content,
+ * never a `changed` re-copy the way Serato's diff can produce, since
+ * template-modify never rewrites a track that's already on the drive.
+ */
+export type RekordboxBurnPhase = 'diffing' | 'copying' | 'writingPdb' | 'verifying';
+
+export interface RekordboxBurnProgress {
+  phase: RekordboxBurnPhase;
+  /** The track path currently being diffed/copied. Only set during 'diffing'/'copying'. */
+  current?: string;
+  processed: number;
+  /** Only known during 'diffing'/'copying'. */
+  total?: number;
+}
+
+export type RekordboxBurnProgressCallback = (progress: RekordboxBurnProgress) => void;
+
 export function emptyNode(name: string, path: string[]): CanonicalNode {
   return { name, path, children: [], tracks: [] };
 }
