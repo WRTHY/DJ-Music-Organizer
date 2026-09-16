@@ -89,6 +89,19 @@ export interface RekordboxWriteOptions {
    * guessed at here -- see docs/decisions.md, Deliverable 2 entry.
    */
   pythonExecutable?: string;
+  /**
+   * Arguments inserted between `pythonExecutable` and the driver script
+   * path -- e.g. `['-3']` for Windows' `py` launcher (`py -3
+   * rekordbox_write_driver.py`). Defaults to none, matching a plain
+   * `python3 rekordbox_write_driver.py` invocation. Added alongside
+   * `resolveDefaultPythonInvocation` below after a real, concrete finding
+   * (docs/decisions.md, 2026-09-16): James's Windows machine registers
+   * Python only with the `py` launcher (confirmed via `py -0p`), not as a
+   * bare `python`/`python3` on PATH (confirmed via `where python`
+   * returning nothing) -- so `spawn('python3', [driverScriptPath])` alone
+   * cannot work there, but `spawn('py', ['-3', driverScriptPath])` can.
+   */
+  pythonArgs?: string[];
   /** Absolute path to vendor/rekordbox-pdb/src. Defaults to that real location, resolved relative to this file. */
   vendorSrcPath?: string;
   /** Absolute path to rekordbox_write_driver.py. Defaults to the copy shipped alongside this module. */
@@ -97,6 +110,24 @@ export interface RekordboxWriteOptions {
 
 const DEFAULT_VENDOR_SRC_PATH = path.join(__dirname, '..', '..', '..', '..', 'vendor', 'rekordbox-pdb', 'src');
 const DEFAULT_DRIVER_SCRIPT_PATH = path.join(__dirname, '..', '..', 'pyscripts', 'rekordbox_write_driver.py');
+
+/**
+ * The real per-platform default for how to invoke Python, resolved by the
+ * caller (eventually `registerIpc.ts`, the same dependency-injection shape
+ * as `storePath`/`sourceDatabaseV2`) rather than guessed at inside
+ * `writeRekordboxPdb` itself. No single default is safe across platforms:
+ * a typical Linux box has `python3` on PATH with no `py` launcher at all,
+ * while current Windows (as of the finding above) registers Python
+ * through the `py` launcher and does not reliably put a bare `python` on
+ * PATH. `platform` defaults to `process.platform` so ordinary callers
+ * don't have to pass it, while a test can pass either value directly
+ * without needing to fake `process.platform` itself.
+ */
+export function resolveDefaultPythonInvocation(
+  platform: NodeJS.Platform = process.platform
+): { executable: string; args: string[] } {
+  return platform === 'win32' ? { executable: 'py', args: ['-3'] } : { executable: 'python3', args: [] };
+}
 
 /**
  * Applies `ops` to `templatePath` in one PdbEditor session and writes the
@@ -112,6 +143,7 @@ export async function writeRekordboxPdb(
   options: RekordboxWriteOptions = {}
 ): Promise<RekordboxWriteResult> {
   const pythonExecutable = options.pythonExecutable ?? 'python3';
+  const pythonArgs = options.pythonArgs ?? [];
   const vendorSrcPath = options.vendorSrcPath ?? DEFAULT_VENDOR_SRC_PATH;
   const driverScriptPath = options.driverScriptPath ?? DEFAULT_DRIVER_SCRIPT_PATH;
 
@@ -125,7 +157,7 @@ export async function writeRekordboxPdb(
   return new Promise<RekordboxWriteResult>((resolve) => {
     let child;
     try {
-      child = spawn(pythonExecutable, [driverScriptPath], { stdio: ['pipe', 'pipe', 'pipe'] });
+      child = spawn(pythonExecutable, [...pythonArgs, driverScriptPath], { stdio: ['pipe', 'pipe', 'pipe'] });
     } catch (err) {
       resolve({ ok: false, createdIds: {}, error: `failed to launch "${pythonExecutable}": ${(err as Error).message}` });
       return;

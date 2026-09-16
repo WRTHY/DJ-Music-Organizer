@@ -8,8 +8,12 @@ import {
   DiffSummary,
   OrganizePlan,
   OrganizeReport,
+  RekordboxBurnPhase,
+  RekordboxBurnProgress,
+  RekordboxBurnReport,
   ScanProgress,
   burn,
+  burnRekordbox,
   diffBurn,
   executeOrganize,
   planOrganize,
@@ -31,7 +35,7 @@ import styles from './App.module.css';
 // each, because the actions are sequential and share state (you can't
 // plan while a scan is still landing, execute reads the last plan, etc.)
 // — so every button disables while any one of them is in flight.
-type ActionKey = 'scan' | 'plan' | 'dryRun' | 'execute' | 'diffBurn' | 'burn';
+type ActionKey = 'scan' | 'plan' | 'dryRun' | 'execute' | 'diffBurn' | 'burn' | 'burnRekordbox';
 type ScanMode = 'folders' | 'crates';
 
 function countTracks(tree: CanonicalTree): number {
@@ -95,6 +99,30 @@ function BurnProgressBar({ progress }: { progress: BurnProgress }) {
   const label = progress.current
     ? `${BURN_PHASE_LABELS[progress.phase]}: ${progress.current}`
     : `${BURN_PHASE_LABELS[progress.phase]}…`;
+  return (
+    <ProgressBar
+      label={label}
+      detail={progress.total ? `${progress.processed} / ${progress.total} tracks` : undefined}
+      fraction={progress.total ? progress.processed / progress.total : undefined}
+    />
+  );
+}
+
+// Rekordbox's own phase set (@mlo/core's RekordboxBurnPhase) -- a
+// deliberately separate type from BurnPhase above (see its doc), so this
+// gets its own label lookup and progress-bar component rather than
+// reusing BURN_PHASE_LABELS/BurnProgressBar with a cast.
+const REKORDBOX_BURN_PHASE_LABELS: Record<RekordboxBurnPhase, string> = {
+  diffing: 'Comparing',
+  copying: 'Copying',
+  writingPdb: 'Writing export.pdb',
+  verifying: 'Verifying',
+};
+
+function RekordboxBurnProgressBar({ progress }: { progress: RekordboxBurnProgress }) {
+  const label = progress.current
+    ? `${REKORDBOX_BURN_PHASE_LABELS[progress.phase]}: ${progress.current}`
+    : `${REKORDBOX_BURN_PHASE_LABELS[progress.phase]}…`;
   return (
     <ProgressBar
       label={label}
@@ -188,10 +216,19 @@ export default function App() {
   const [diffSummary, setDiffSummary] = useState<DiffSummary | null>(null);
   const [burnReport, setBurnReport] = useState<BurnReport | null>(null);
 
+  // Phase 5: burn to Rekordbox. `deviceRoot` is the drive itself (e.g.
+  // D:\) -- templatePath/outputPath/volumeRoot are all derived from it by
+  // convention in main/ipcHandlers.ts's resolveRekordboxPaths, so there's
+  // no separate template/output picker here. Shares `tree`/`excludedKeys`
+  // with the copy and Serato-burn flows above, same reasoning as burnTarget.
+  const [rekordboxDeviceRoot, setRekordboxDeviceRoot] = useState('');
+  const [rekordboxBurnReport, setRekordboxBurnReport] = useState<RekordboxBurnReport | null>(null);
+
   const [loadingAction, setLoadingAction] = useState<ActionKey | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
   const [burnProgress, setBurnProgress] = useState<BurnProgress | null>(null);
+  const [rekordboxBurnProgress, setRekordboxBurnProgress] = useState<RekordboxBurnProgress | null>(null);
 
   // Subscribed for the app's lifetime, not just while a scan/burn is
   // running -- there's no harm in an idle listener, and it avoids a
@@ -199,6 +236,7 @@ export default function App() {
   // handleBurn's own state updates.
   useEffect(() => window.mlo.onScanProgress(setScanProgress), []);
   useEffect(() => window.mlo.onBurnProgress(setBurnProgress), []);
+  useEffect(() => window.mlo.onBurnRekordboxProgress(setRekordboxBurnProgress), []);
 
   const trackCount = useMemo(() => (tree ? countTracks(tree) : 0), [tree]);
   const selectedCount = useMemo(
@@ -305,6 +343,19 @@ export default function App() {
         setBurnReport(result);
         setDiffSummary(result.diffSummary);
       }
+    );
+  };
+
+  const handleBurnRekordbox = () => {
+    setRekordboxBurnProgress(null);
+    return run(
+      'burnRekordbox',
+      () => {
+        if (!tree) throw new Error('Scan a library first.');
+        if (!rekordboxDeviceRoot) throw new Error('Choose a Rekordbox device root first.');
+        return burnRekordbox(tree, rekordboxDeviceRoot, Array.from(excludedKeys));
+      },
+      setRekordboxBurnReport
     );
   };
 
@@ -595,6 +646,90 @@ export default function App() {
                 ))}
               </ul>
               <FailedItems results={burnReport.organizeReport.results} />
+            </>
+          )}
+        </Card>
+      )}
+
+      {tree && (
+        <Card tone="alt" as="section" className={styles.section}>
+          <h2>Burn to Rekordbox</h2>
+          <p className={styles.subtitle}>
+            Template-modify (decision 30): appends new tracks and playlists onto a drive that's
+            already been exported once by real Rekordbox — never rewrites what's already there.
+            Unlike "Burn to flash" above, there's no preview button here — this always performs
+            the real write, to a <code>.mlo-candidate</code> file beside the drive's real{' '}
+            <code>export.pdb</code>, never that file itself. Promoting the candidate to be the
+            drive's real export is a separate, manual step you do yourself afterward.
+          </p>
+
+          <FolderField
+            label={String.raw`Rekordbox device root (a drive already exported once by real Rekordbox — e.g. D:\)`}
+            value={rekordboxDeviceRoot}
+            onChange={setRekordboxDeviceRoot}
+            onBrowse={pickFolder(setRekordboxDeviceRoot)}
+          />
+
+          <div className={styles.actions}>
+            <Button
+              variant="primary"
+              onClick={handleBurnRekordbox}
+              disabled={!tree || !rekordboxDeviceRoot || isBusy}
+              loading={loadingAction === 'burnRekordbox'}
+            >
+              {loadingAction === 'burnRekordbox' ? 'Burning…' : 'Burn to Rekordbox'}
+            </Button>
+          </div>
+
+          {loadingAction === 'burnRekordbox' && rekordboxBurnProgress && (
+            <RekordboxBurnProgressBar progress={rekordboxBurnProgress} />
+          )}
+
+          {rekordboxBurnReport && (
+            <>
+              <p>
+                {rekordboxBurnReport.diffSummary.new} new &middot;{' '}
+                {rekordboxBurnReport.diffSummary.existing} already on the drive
+              </p>
+              <p
+                role={
+                  rekordboxBurnReport.writeResult.ok && rekordboxBurnReport.verification.ok ? undefined : 'alert'
+                }
+                className={
+                  rekordboxBurnReport.writeResult.ok && rekordboxBurnReport.verification.ok
+                    ? styles.subtitle
+                    : styles.error
+                }
+              >
+                {!rekordboxBurnReport.writeResult.ok
+                  ? `Write failed: ${rekordboxBurnReport.writeResult.error ?? '(no error message captured)'}`
+                  : rekordboxBurnReport.verification.ok
+                    ? 'Verified: every new track reads back correctly at its intended playlist path in the candidate file.'
+                    : `Verification found ${rekordboxBurnReport.verification.missing.length} track(s) missing from the candidate read-back.`}
+              </p>
+              {rekordboxBurnReport.skippedTrackCount > 0 && (
+                <p role="alert" className={styles.error}>
+                  {rekordboxBurnReport.skippedTrackCount} track(s) were classified as new but never made it
+                  into the write batch — their audio copy must have failed. Check the report below.
+                </p>
+              )}
+              <ul className={styles.reportList}>
+                {Object.entries(rekordboxBurnReport.organizeReport.summary).map(([status, count]) => (
+                  <li key={status}>
+                    {status}: {count}
+                  </li>
+                ))}
+              </ul>
+              <FailedItems results={rekordboxBurnReport.organizeReport.results} />
+              {rekordboxBurnReport.writeResult.ok && (
+                <p className={styles.subtitle}>
+                  Candidate written to <code>PIONEER\rekordbox\export.pdb.mlo-candidate</code> on{' '}
+                  <code>{rekordboxDeviceRoot}</code>. The real <code>export.pdb</code> was not
+                  touched — promoting the candidate is a manual step: back up the real file, then
+                  replace it yourself once you've confirmed the result looks right in real
+                  Rekordbox.
+                </p>
+              )}
             </>
           )}
         </Card>

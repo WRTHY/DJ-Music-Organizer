@@ -10,6 +10,9 @@ import type {
   OrganizePlan,
   OrganizePlanItem,
   OrganizeReport,
+  RekordboxBurnPhase,
+  RekordboxBurnProgress,
+  RekordboxBurnReport,
   ScanProgress,
   SeratoSourceType,
 } from '@mlo/core';
@@ -30,6 +33,9 @@ export type {
   OrganizePlan,
   OrganizePlanItem,
   OrganizeReport,
+  RekordboxBurnPhase,
+  RekordboxBurnProgress,
+  RekordboxBurnReport,
   ScanProgress,
   SeratoSourceType,
 };
@@ -71,6 +77,22 @@ export const IPC_CHANNELS = {
   // each) since a listener tells them apart by `BurnProgress.phase`
   // anyway -- diffBurn only ever emits 'diffing' events.
   burnProgress: 'burn:progress',
+  // Phase 5 (docs/roadmap.md): burn-to-Rekordbox. A single write-capable
+  // call, deliberately with no separate diff-only preview channel the
+  // way diffBurn/burn have -- @mlo/core's burnToRekordbox has no
+  // diff-only mode to call into (decision 30 never separated preview
+  // from write for the Rekordbox side the way Serato's diffAgainstDestination
+  // did), so a "preview" button here would either be fake or require new
+  // core work this deliverable deliberately doesn't take on. See this
+  // file's BurnRekordboxArgs doc for what it actually writes.
+  burnRekordbox: 'burn:rekordbox:execute',
+  // Same push-progress pattern as burnProgress above, kept on its own
+  // channel rather than shared with it -- RekordboxBurnProgress is a
+  // deliberately separate type from BurnProgress (see @mlo/core's
+  // RekordboxBurnPhase doc), so sharing one channel would mean every
+  // listener has to duck-type which shape just arrived instead of the
+  // channel name already telling it.
+  burnRekordboxProgress: 'burn:rekordbox:progress',
 } as const;
 
 export interface DetectSeratoSourceResult {
@@ -150,6 +172,34 @@ export interface BurnExecuteArgs extends BurnArgs {
 }
 
 /**
+ * Phase 5 burn-to-Rekordbox (docs/roadmap.md). Deliberately just a device
+ * root, not a template/output file pair -- rather than adding a new
+ * file-picker IPC call, this reuses the existing folder picker
+ * (`selectFolder`) and derives the real paths by the same convention
+ * real Rekordbox exports already use and this project's own reader has
+ * relied on since decision 21: `templatePath` is
+ * `<deviceRoot>/PIONEER/rekordbox/export.pdb`, and `volumeRoot` is
+ * `deviceRoot` itself (the parent of `PIONEER`, exactly
+ * `RekordboxBurnOptions.volumeRoot`'s own doc in @mlo/core). See
+ * main/ipcHandlers.ts's `burnRekordbox` for where these are actually
+ * resolved -- kept there rather than duplicated in the renderer, so
+ * there's exactly one place that knows this convention.
+ *
+ * `outputPath` is deliberately NOT exposed here at all: `writeRekordboxPdb`
+ * never touches `templatePath`, and this handler always writes to a
+ * `.mlo-candidate` file beside it rather than the device's real
+ * `export.pdb` -- promoting that candidate to be the drive's real export
+ * stays a separate, manual, human-gated step (decision 33's "deliberately
+ * not done here"), same trust-gate posture as Deliverable 5's real
+ * hardware check.
+ */
+export interface BurnRekordboxArgs {
+  tree: CanonicalTree;
+  deviceRoot: string;
+  excludedKeys?: string[];
+}
+
+/**
  * The already-analyzed `database V2` a real burn reads from by default
  * when the caller doesn't specify one -- James's library backup, not his
  * live `E:\_Serato_\database V2`, so this feature can never read (let
@@ -195,4 +245,15 @@ export interface MloApi {
    * never by inspecting an event's shape at runtime.
    */
   onBurnProgress(callback: (progress: BurnProgress) => void): () => void;
+  /**
+   * Writes new tracks/playlists from `args.tree` onto a real Rekordbox
+   * device export, template-modify style (decision 30) -- see
+   * BurnRekordboxArgs's doc for the path convention and why there's no
+   * separate preview call. Resolves once the whole burn (diff, copy,
+   * pdb write, verify) has finished; use onBurnRekordboxProgress for
+   * mid-call phase updates, same split as diffBurn/burn above.
+   */
+  burnRekordbox(args: BurnRekordboxArgs): Promise<RekordboxBurnReport>;
+  /** Same subscribe/unsubscribe shape as onBurnProgress, for RekordboxBurnProgress events instead. */
+  onBurnRekordboxProgress(callback: (progress: RekordboxBurnProgress) => void): () => void;
 }

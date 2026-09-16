@@ -16,6 +16,9 @@ export type {
   OrganizePlan,
   OrganizePlanItem,
   OrganizeReport,
+  RekordboxBurnPhase,
+  RekordboxBurnProgress,
+  RekordboxBurnReport,
   ScanProgress,
 } from '../../shared/ipcContract';
 
@@ -70,4 +73,12 @@ export function burn(
   excludedKeys?: string[]
 ) {
   return window.mlo.burn({ tree, targetRoot, mode, excludedKeys });
+}
+
+// Phase 5 (docs/roadmap.md): burn-to-Rekordbox. Just a device root, not a
+// template/output file pair -- see BurnRekordboxArgs's doc in
+// ipcContract.ts for the path convention this derives from it, and why
+// there's no separate preview call the way diffBurn/burn have one.
+export function burnRekordbox(tree: CanonicalTree, deviceRoot: string, excludedKeys?: string[]) {
+  return window.mlo.burnRekordbox({ tree, deviceRoot, excludedKeys });
 }

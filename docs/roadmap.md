@@ -571,14 +571,99 @@ Deliverables, in build order:
    success signal alone" posture as `verifyBurn`) rather than a separate
    pass, since the orchestrator and its verification were designed
    together from the start.
-5. Hardware-adjacent trust gate, honest about the ceiling (decision 22
-   applies here too, doubly so since this is someone else's write code):
-   open a modified stick in real Rekordbox software and confirm by eye,
-   since CDJ hardware isn't available.
+5. **Passed, 2026-09-16** — hardware-adjacent trust gate. A candidate
+   `export.pdb` was built from a real test track against a staged copy of
+   James's actual reference USB, verified three independent ways in the
+   sandbox, then deployed onto the real `F:\` drive (both an on-drive and
+   an off-drive backup of the original taken first). James opened the
+   real drive in real Rekordbox software: the new "MLO Deliverable 5
+   Test" track appears and plays correctly, and the rest of his real
+   library was undisturbed. One real scope boundary surfaced alongside
+   the pass — the new track shows in Rekordbox's "device library" (what
+   `export.pdb` backs, and what CDJ hardware actually reads) but not in
+   "OneLibrary," a separate, newer SQLite-backed view (`exportLibrary.db`
+   on the same drive) this project's writer was never targeting and does
+   not touch. Full write-up, including why that's a boundary rather than
+   a bug, in `docs/decisions.md`.
 6. Not blocking v1, but real: resolve how a Python runtime reaches a
    friend's machine before this ships beyond James's own — bundling a
    frozen executable per platform, versus requiring system Python for
-   now while this stays single-user.
+   now while this stays single-user. James now has Python on his own
+   machine (installed 2026-09-16), but via Windows' newer install-manager
+   path rather than the plain python.org installer, and it picked up
+   3.14.7 rather than the 3.13.x this project had recommended — still
+   above the vendored library's `>=3.10` floor, but not yet confirmed
+   working end to end against it. **First follow-up resolved by
+   Deliverable 7 below**: `where python`/`py -0p` finding James's machine
+   registers Python only via the `py` launcher is now handled directly
+   in code (`pythonArgs`/`resolveDefaultPythonInvocation`), not just
+   documented. **Still open**: confirming the vendored `rekordbox-pdb`
+   library runs cleanly end-to-end under 3.14.7, via a real UI-driven
+   burn — folded into Deliverable 7's own "still open" item below. The
+   friends'-machine bundling question remains separate and later.
+7. **UI wiring — done, 2026-09-16** (`docs/decisions.md` same-day entry):
+   `burnToRekordbox` (Deliverable 3) wired into the desktop app for the
+   first time — until now it had only ever been exercised via core tests
+   and ad hoc scripts, including Deliverable 5's real hardware trust
+   gate. Mirrors Phase 3b Deliverable 7's shape: new
+   `BurnRekordboxArgs`/`burnRekordbox`/`onBurnRekordboxProgress`
+   additions to the shared IPC contract, a `burnRekordbox` handler in
+   `main/ipcHandlers.ts`, wiring in `registerIpc.ts` and
+   `preload/index.ts`, and a new "Burn to Rekordbox" card in `App.tsx`.
+   Deliberately just a device root, not a template/output file pair —
+   `templatePath`/`outputPath`/`volumeRoot` are derived by convention
+   (`<deviceRoot>/PIONEER/rekordbox/export.pdb[.mlo-candidate]`), reusing
+   the existing folder picker rather than adding a new one. No diff-only
+   preview mode exists (unlike `diffBurn`/`burn`) since `burnToRekordbox`
+   itself has none — the UI always performs the real write, but only
+   ever to a `.mlo-candidate` file beside the real `export.pdb`, never
+   the file itself; promoting a candidate to be the drive's real export
+   stays a separate, manual, human-gated step (decision 33), same
+   trust-gate posture as Deliverable 5. Also fixes item 6's `py`-launcher
+   finding directly: a new `pythonArgs` option on `RekordboxWriteOptions`
+   plus `resolveDefaultPythonInvocation()` (`py -3` on `win32`,
+   `python3` elsewhere), applied as `registerIpc.ts`'s default so the
+   desktop app's real spawn call matches James's actual machine rather
+   than assuming a bare `python3` on PATH. `core` suite: 137 tests (up
+   from 133, +4: `pythonArgs` plumbing + 3 for
+   `resolveDefaultPythonInvocation`); `desktop`'s `ipcHandlers.test.ts`:
+   21 tests (+5: path derivation + the `burnRekordbox` handler). Also
+   surfaced and fixed an independent, pre-existing gap: `api.ts` never
+   re-exported `BurnPhase`/`BurnProgress` even though `App.tsx` already
+   imported both from it — full write-up in `docs/decisions.md`. Renderer
+   (`App.tsx`) verified only via the lighter stub-based typecheck (same
+   posture as Phase 3b Deliverable 7), not the full
+   `tsconfig.renderer.json` pass — still worth James's own
+   `npm run typecheck`. **Still open**: the real end-to-end validation
+   burn — James's centralized `CURRENT_LIBRARY` canonical tree, scanned
+   in crate-database mode, burned through this new UI onto the bootstrap
+   drive — not yet run.
+
+**Redirect, 2026-09-16 — resolved.** After Deliverable 5 passed, James
+asked to move this project toward burning to a fresh/third dedicated
+drive rather than continuing to modify his existing, already-exported
+library drive. This forked into two options (see `docs/decisions.md`):
+(a) pre-export a blank target drive from real Rekordbox once, giving it a
+valid empty skeleton for the existing template-modify mechanism to append
+onto; or (b) build an actual from-scratch `export.pdb` writer. **Resolved
+in favor of (a), with a real optimization**: James's own concern was
+time, not correctness — a full-library Rekordbox export takes hours
+across 10,000+ tracks, and repeating that isn't viable. The fix is that
+the bootstrap export doesn't need to contain the library at all —
+`PdbEditor`'s append mechanism has only ever been tested against a
+minimal one-song template (the vendored library's own fixture) and
+behaves identically whether the template has one track or James's real
+3,549. So the one-time manual step is: format a blank drive, export one
+throwaway track from real Rekordbox onto it (seconds, not hours), then
+hand the result to `burnToRekordbox` (decisions 30–34, already built and
+hardware-confirmed) to populate the real library at full automated
+speed. **No new engineering required** — this is a real-world validation
+step (James actually doing the bootstrap and running a real burn against
+the result), not a development task. **Update, 2026-09-16**: Deliverable
+7 below now wires `burnToRekordbox` into the desktop app, which is what
+makes this real-world step actually runnable through the UI instead of
+requiring cloud-sandbox scripting — it remains the one thing left to do,
+not to build.
 
 ## Phase 6 — Beyond porting: library management features
 

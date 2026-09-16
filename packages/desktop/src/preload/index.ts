@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
-import { BurnProgress, IPC_CHANNELS, MloApi, ScanProgress } from '../shared/ipcContract';
+import { BurnProgress, IPC_CHANNELS, MloApi, RekordboxBurnProgress, ScanProgress } from '../shared/ipcContract';
 
 /**
  * The renderer's entire view of the outside world. `contextIsolation:
@@ -32,6 +32,12 @@ const api: MloApi = {
     const listener = (_event: IpcRendererEvent, progress: BurnProgress) => callback(progress);
     ipcRenderer.on(IPC_CHANNELS.burnProgress, listener);
     return () => ipcRenderer.removeListener(IPC_CHANNELS.burnProgress, listener);
+  },
+  burnRekordbox: (args) => ipcRenderer.invoke(IPC_CHANNELS.burnRekordbox, args),
+  onBurnRekordboxProgress: (callback) => {
+    const listener = (_event: IpcRendererEvent, progress: RekordboxBurnProgress) => callback(progress);
+    ipcRenderer.on(IPC_CHANNELS.burnRekordboxProgress, listener);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.burnRekordboxProgress, listener);
   },
 };
 

@@ -1,12 +1,15 @@
 import { app, BrowserWindow, dialog, ipcMain } from 'electron';
 import path from 'node:path';
+import { resolveDefaultPythonInvocation, type RekordboxWriteOptions } from '@mlo/core';
 import { IPC_CHANNELS } from '../shared/ipcContract';
 import type {
   BurnArgs,
   BurnExecuteArgs,
   BurnProgress,
+  BurnRekordboxArgs,
   ExecuteOrganizeArgs,
   PlanOrganizeArgs,
+  RekordboxBurnProgress,
   ScanCrateDatabaseArgs,
   ScanProgress,
 } from '../shared/ipcContract';
@@ -26,6 +29,18 @@ export function registerIpc(window: BrowserWindow): void {
   // here rather than inside ipcHandlers.ts specifically so that file stays
   // free of any Electron import -- see its module doc.
   const trackIndexStorePath = path.join(app.getPath('userData'), 'track-index.json');
+
+  // Real per-platform Python invocation for the Rekordbox burn (Phase 5,
+  // docs/decisions.md 2026-09-16 finding): resolved once, here, from the
+  // real `process.platform` this app is actually running on -- same
+  // dependency-injection shape as trackIndexStorePath above and
+  // DEFAULT_SOURCE_DATABASE_V2 on the Serato burn, kept out of
+  // ipcHandlers.ts so that file stays free of any platform-detection
+  // logic a test would have to account for.
+  const rekordboxWriterOptions: RekordboxWriteOptions = (() => {
+    const { executable, args } = resolveDefaultPythonInvocation(process.platform);
+    return { pythonExecutable: executable, pythonArgs: args };
+  })();
 
   ipcMain.handle(IPC_CHANNELS.selectFolder, async () => {
     const result = await dialog.showOpenDialog(window, {
@@ -71,6 +86,12 @@ export function registerIpc(window: BrowserWindow): void {
   ipcMain.handle(IPC_CHANNELS.burn, async (event, args: BurnExecuteArgs) => {
     return handlers.burn(args, trackIndexStorePath, undefined, (progress: BurnProgress) => {
       event.sender.send(IPC_CHANNELS.burnProgress, progress);
+    });
+  });
+
+  ipcMain.handle(IPC_CHANNELS.burnRekordbox, async (event, args: BurnRekordboxArgs) => {
+    return handlers.burnRekordbox(args, trackIndexStorePath, rekordboxWriterOptions, (progress: RekordboxBurnProgress) => {
+      event.sender.send(IPC_CHANNELS.burnRekordboxProgress, progress);
     });
   });
 }

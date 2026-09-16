@@ -1,13 +1,16 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { DATABASE_V2_FILENAME, writeDatabaseV2 } from '@mlo/core';
 import {
   burn,
+  burnRekordbox,
   detectSeratoSource,
   diffBurn,
   executeOrganize,
   planOrganize,
+  resolveRekordboxPaths,
   scanCrateDatabase,
   scanFolderTree,
 } from '../src/main/ipcHandlers';
@@ -299,6 +302,106 @@ describe('diffBurn / burn', () => {
         storePath
       )
     ).rejects.toThrow();
+  });
+});
+
+describe('resolveRekordboxPaths', () => {
+  it('derives templatePath/outputPath under PIONEER/rekordbox, and volumeRoot as the device root itself', () => {
+    const deviceRoot = path.join('D:', 'x');
+    expect(resolveRekordboxPaths(deviceRoot)).toEqual({
+      templatePath: path.join(deviceRoot, 'PIONEER', 'rekordbox', 'export.pdb'),
+      outputPath: path.join(deviceRoot, 'PIONEER', 'rekordbox', 'export.pdb.mlo-candidate'),
+      volumeRoot: deviceRoot,
+    });
+  });
+
+  it('never points outputPath at the same file as templatePath', () => {
+    const { templatePath, outputPath } = resolveRekordboxPaths(path.join('D:', 'x'));
+    expect(outputPath).not.toBe(templatePath);
+  });
+});
+
+describe('burnRekordbox', () => {
+  function pythonAvailable(): boolean {
+    try {
+      execFileSync('python3', ['--version'], { stdio: 'ignore' });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  const HAVE_PYTHON = pythonAvailable();
+  const maybeIt = HAVE_PYTHON ? it : it.skip;
+  if (!HAVE_PYTHON) {
+    // eslint-disable-next-line no-console
+    console.warn('burnRekordbox integration tests skipped: python3 not found on this machine.');
+  }
+
+  const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
+  const FIXTURE_PDB = path.join(REPO_ROOT, 'vendor', 'rekordbox-pdb', 'tests', 'data', 'one-song-export.pdb');
+
+  let deviceRoot: string;
+  let sourceRoot: string;
+  let storePath: string;
+
+  beforeEach(async () => {
+    deviceRoot = await makeTmpDir('mlo-ipc-rbburn-device-');
+    sourceRoot = await makeTmpDir('mlo-ipc-rbburn-source-');
+    const storeDir = await makeTmpDir('mlo-ipc-rbburn-index-');
+    storePath = path.join(storeDir, 'index.json');
+
+    // Sets the device up exactly the way resolveRekordboxPaths expects to
+    // find a real Rekordbox-exported drive: a template export.pdb at
+    // PIONEER/rekordbox -- here, a copy of the vendored library's own
+    // fixture, standing in for the "minimal, one-time, real-Rekordbox
+    // export" bootstrap decision 37 settled on. This handler must never
+    // write to this file -- the assertions below check that directly.
+    const rekordboxDir = path.join(deviceRoot, 'PIONEER', 'rekordbox');
+    await fs.mkdir(rekordboxDir, { recursive: true });
+    await fs.copyFile(FIXTURE_PDB, path.join(rekordboxDir, 'export.pdb'));
+
+    await fs.mkdir(path.join(sourceRoot, 'MLO', 'Test'), { recursive: true });
+    await fs.writeFile(path.join(sourceRoot, 'MLO', 'Test', 'track1.mp3'), 'brand new candidate audio');
+  });
+
+  afterEach(async () => {
+    await fs.rm(deviceRoot, { recursive: true, force: true });
+    await fs.rm(sourceRoot, { recursive: true, force: true });
+  });
+
+  maybeIt('writes a candidate output beside the template without ever touching the template itself', async () => {
+    const tree = await scanFolderTree(sourceRoot);
+    const before = await fs.readFile(path.join(deviceRoot, 'PIONEER', 'rekordbox', 'export.pdb'));
+
+    const report = await burnRekordbox({ tree, deviceRoot }, storePath);
+
+    expect(report.writeResult.ok).toBe(true);
+    expect(report.diffSummary.new).toBe(1);
+    const { templatePath, outputPath } = resolveRekordboxPaths(deviceRoot);
+    const after = await fs.readFile(templatePath);
+    expect(after.equals(before)).toBe(true);
+    const candidateExists = await fs.access(outputPath).then(() => true, () => false);
+    expect(candidateExists).toBe(true);
+  });
+
+  maybeIt('forwards progress through the optional onProgress callback', async () => {
+    const tree = await scanFolderTree(sourceRoot);
+    const events: unknown[] = [];
+    await burnRekordbox({ tree, deviceRoot }, storePath, undefined, (p) => events.push(p));
+    expect(events.length).toBeGreaterThan(0);
+  });
+
+  maybeIt('respects excludedKeys the same way the Serato burn handlers do', async () => {
+    await fs.mkdir(path.join(sourceRoot, 'Skip Me'), { recursive: true });
+    await fs.writeFile(path.join(sourceRoot, 'Skip Me', 'track2.mp3'), 'should not be burned');
+
+    const tree = await scanFolderTree(sourceRoot);
+    const report = await burnRekordbox({ tree, deviceRoot, excludedKeys: ['Skip Me'] }, storePath);
+
+    // Only the one un-excluded track should have been classified/copied --
+    // 'MLO/Test/track1.mp3' -- not the excluded 'Skip Me/track2.mp3'.
+    expect(report.diffSummary.new).toBe(1);
+    expect(report.organizeReport.summary.copied).toBe(1);
   });
 });
 

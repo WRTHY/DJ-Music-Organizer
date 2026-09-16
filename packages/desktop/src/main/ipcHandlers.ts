@@ -1,10 +1,15 @@
+import path from 'node:path';
 import fs from 'node:fs/promises';
 import {
   type BurnProgressCallback,
   type CanonicalTree,
   type DatabaseV2Source,
+  type RekordboxBurnProgressCallback,
+  type RekordboxBurnReport,
+  type RekordboxWriteOptions,
   JsonTrackIndexStore,
   burnToFlash,
+  burnToRekordbox,
   detectSourceType,
   diffAgainstDestination,
   executePlan,
@@ -19,6 +24,7 @@ import {
   DEFAULT_SOURCE_DATABASE_V2,
   type BurnArgs,
   type BurnExecuteArgs,
+  type BurnRekordboxArgs,
   type DetectSeratoSourceResult,
   type ExecuteOrganizeArgs,
   type PlanOrganizeArgs,
@@ -188,6 +194,73 @@ export async function burn(
     store,
     mode: args.mode ?? 'copy',
     sourceDatabaseV2,
+    onProgress,
+  });
+  await store.save();
+  return report;
+}
+
+/**
+ * Derives the real Rekordbox paths a device root implies, by the same
+ * convention this project's reader has trusted since decision 21 and
+ * real Rekordbox exports already use: `<deviceRoot>/PIONEER/rekordbox/
+ * export.pdb` as the template, `deviceRoot` itself as the volume root.
+ * `outputPath` is a sibling `.mlo-candidate` file, never `templatePath`
+ * itself -- `writeRekordboxPdb` already refuses to touch its template,
+ * this just keeps the candidate visibly separate and obviously-not-live
+ * on disk too, so promoting it to be the drive's real export.pdb stays
+ * the deliberate, separate, human-gated step decision 33 left it as.
+ * Exported for the same reason `applySelection` above isn't: a test can
+ * exercise this path convention on its own, without spinning up a real
+ * burn.
+ */
+export function resolveRekordboxPaths(deviceRoot: string): {
+  templatePath: string;
+  outputPath: string;
+  volumeRoot: string;
+} {
+  const rekordboxDir = path.join(deviceRoot, 'PIONEER', 'rekordbox');
+  return {
+    templatePath: path.join(rekordboxDir, 'export.pdb'),
+    outputPath: path.join(rekordboxDir, 'export.pdb.mlo-candidate'),
+    volumeRoot: deviceRoot,
+  };
+}
+
+/**
+ * Phase 5 (docs/roadmap.md): the Rekordbox counterpart to `burn` above.
+ * No diff-only preview split -- see BurnRekordboxArgs's doc in
+ * ipcContract.ts for why -- so this always performs the real write
+ * (into a `.mlo-candidate` output, never the device's real export.pdb;
+ * see resolveRekordboxPaths above). Shares the same `storePath`-backed
+ * `TrackIndexStore` cache as the Serato burn handlers -- keyed by
+ * absolute file path and content hash, so there's no correctness reason
+ * to keep two separate caches for two burn targets.
+ *
+ * `writerOptions` carries the real per-platform Python invocation
+ * (`registerIpc.ts` resolves it via @mlo/core's
+ * `resolveDefaultPythonInvocation`, the same dependency-injection shape
+ * as `defaultSourceDatabaseV2` on `burn` above) -- a plain parameter
+ * here, not computed in this file, so a test can supply its own instead
+ * of depending on whatever Python happens to be on the machine running
+ * the suite.
+ */
+export async function burnRekordbox(
+  args: BurnRekordboxArgs,
+  storePath: string,
+  writerOptions?: RekordboxWriteOptions,
+  onProgress?: RekordboxBurnProgressCallback
+): Promise<RekordboxBurnReport> {
+  const store = new JsonTrackIndexStore(storePath);
+  await store.load();
+  const tree = applySelection(args.tree, args.excludedKeys);
+  const { templatePath, outputPath, volumeRoot } = resolveRekordboxPaths(args.deviceRoot);
+  const report = await burnToRekordbox(tree, {
+    store,
+    templatePath,
+    outputPath,
+    volumeRoot,
+    writerOptions,
     onProgress,
   });
   await store.save();

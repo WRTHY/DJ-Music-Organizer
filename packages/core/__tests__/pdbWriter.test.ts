@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { writeRekordboxPdb } from '../src/rekordbox/pdbWriter';
+import { writeRekordboxPdb, resolveDefaultPythonInvocation } from '../src/rekordbox/pdbWriter';
 import { readPdbTracks, readPdbPlaylistTree, readPdbPlaylistEntries } from '../src/rekordbox/pdbReader';
 
 // This module's whole job is spawning a real Python process, so its tests
@@ -119,6 +119,45 @@ describe('writeRekordboxPdb (plumbing, via a stub driver)', () => {
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/could not run/i);
     expect(result.error).toMatch(/PATH/i);
+  });
+
+  maybeIt('inserts pythonArgs between the executable and the driver script, as real interpreter flags', async () => {
+    // Real-world motivation, not a hypothetical: James's Windows machine
+    // (docs/decisions.md, 2026-09-16) only registers Python through the
+    // `py` launcher -- `py -3 script.py`, not a bare `python3 script.py`
+    // -- so this option has to actually reach the spawned argv, and in
+    // the right position: an interpreter flag belongs *before* the script
+    // path, not after it (python3 would otherwise try to run the flag
+    // itself as a script and fail). `-u` (unbuffered stdout/stderr) is a
+    // real, harmless python3 flag -- if pythonArgs landed in the wrong
+    // position, or as a script argument instead of an interpreter flag,
+    // the driver would fail to run at all rather than merely behaving
+    // differently, which is exactly what this test would catch.
+    const script = await writeStubDriver(
+      dir,
+      ['import json', 'print(json.dumps({"ok": True, "createdIds": {"ran": 1}}))'].join('\n')
+    );
+    const result = await writeRekordboxPdb('/template.pdb', '/output.pdb', [], {
+      driverScriptPath: script,
+      pythonArgs: ['-u'],
+    });
+    expect(result.ok).toBe(true);
+    expect(result.createdIds).toEqual({ ran: 1 });
+  });
+});
+
+describe('resolveDefaultPythonInvocation', () => {
+  it('resolves to the py launcher on win32, matching the confirmed real-machine finding', () => {
+    expect(resolveDefaultPythonInvocation('win32')).toEqual({ executable: 'py', args: ['-3'] });
+  });
+
+  it('resolves to a bare python3 on non-Windows platforms', () => {
+    expect(resolveDefaultPythonInvocation('linux')).toEqual({ executable: 'python3', args: [] });
+    expect(resolveDefaultPythonInvocation('darwin')).toEqual({ executable: 'python3', args: [] });
+  });
+
+  it('defaults to the real process.platform when none is given', () => {
+    expect(resolveDefaultPythonInvocation()).toEqual(resolveDefaultPythonInvocation(process.platform));
   });
 });
 
