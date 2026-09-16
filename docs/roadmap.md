@@ -511,12 +511,32 @@ Deliverables, in build order:
    2,408,448 bytes (0.015%) with every original track untouched — direct
    proof the write path is genuinely surgical, not a hidden rewrite. The
    real `F:\` drive was never written to.
-2. A thin main-process wrapper (`packages/core` or a dedicated adapter)
-   that spawns the vendored script as a child process with a diffed set
-   of items to add, capturing success/failure — same
-   dependency-injection shape as every other handler in this project
-   (the Python executable/script path passed in, not hardcoded, so tests
-   can point it at a stub).
+2. **Done, 2026-09-15** — `packages/core/src/rekordbox/pdbWriter.ts`, a thin
+   `writeRekordboxPdb()` wrapper that spawns a Python child process
+   (`packages/core/pyscripts/rekordbox_write_driver.py`, this project's own
+   code, not vendored) running the vendored `PdbEditor` against a batch of
+   `addTrack`/`createPlaylist`/`addToPlaylist`/`setTrackField` ops, resolving
+   cross-references within a batch via caller-chosen `localId`s. Same
+   dependency-injection shape as every other handler in this project — the
+   Python executable, the vendored library's path, and the driver script's
+   path are all optional parameters with real-location defaults, not
+   hardcoded — so tests point them at stand-ins instead of the real
+   interpreter. Every failure mode (missing interpreter, nonzero exit,
+   unparseable stdout, an application-level error such as an unresolvable
+   track id) resolves to a typed `{ok: false, error}` rather than throwing.
+   Verified with a two-tier test suite: isolated "plumbing" tests against a
+   throwaway stub driver script (no real vendored-library dependency), plus
+   a real integration test against the vendored library's own fixture,
+   cross-checked with this project's own already-validated reader — both
+   gated to skip gracefully rather than hard-fail when `python3` isn't
+   found on the machine running the suite, mirroring the vendored library's
+   own posture for fixtures it doesn't have. Core suite: 120 tests passing,
+   up from 112 (+8, all new); desktop package unaffected (16/16). Also
+   surfaced a real, concrete instance of item 6 below: James confirmed he
+   does not currently have Python installed on his own Windows machine, so
+   this feature can build and verify in this project's sandbox today but
+   cannot run for real on his machine until Python is installed — see
+   `docs/decisions.md`.
 3. A `burnToRekordbox`-style orchestrator, parallel to
    `serato/burnToFlash.ts`: diff the canonical tree against what the
    *already-built* Rekordbox reader (`pdbReader.ts`/`canonicalTree.ts`)
